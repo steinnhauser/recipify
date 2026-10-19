@@ -8,7 +8,7 @@
 
 recipify started with a real problem: a professional kitchen's recipe archive of almost 2,000 files collected over many years. It held text PDFs, scanned notebooks with handwriting, Word documents, spreadsheets, photos, EPUB cookbooks and the occasional corrupted file, mostly in Icelandic. recipify sorts that archive by how hard each file is to read, converts everything it can to markdown without overwriting anything, and builds one HTML file that chefs can open on any device to search the collection.
 
-**[Live demo](https://steinnhauser.github.io/recipify/demo/)** (built from the sample recipes in [`examples/`](examples/recipes))
+**[Live demo](https://steinnhm.com/recipify/demo/)** (built from the sample recipes in [`examples/`](examples/recipes))
 
 <p align="center">
   <img src="docs/screenshot-desktop.png" alt="recipify viewer on desktop: recipe list, filters and a recipe" width="72%">

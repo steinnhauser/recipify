@@ -31,7 +31,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/steinnhauser/recipify"
-Demo = "https://steinnhauser.github.io/recipify/demo/"
+Demo = "https://steinnhm.com/recipify/demo/"
 
 [project.scripts]
 recipify = "recipify.cli:app"
