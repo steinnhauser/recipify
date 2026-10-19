@@ -194,7 +194,7 @@ def lock(
     verify: Annotated[bool, typer.Option(help="Only check that OUT opens with the key.")] = False,
     show_link: Annotated[bool, typer.Option(help="Print the share link with the key.")] = False,
     base_url: Annotated[str, typer.Option(help="Where OUT is published.")] = (
-        "https://steinnhauser.github.io/recipify/"
+        "https://steinnhm.com/recipify/"
     ),
 ) -> None:
     """Encrypt the viewer with ENCRYPTION_KEY (env or .env) for publishing on GitHub Pages."""
