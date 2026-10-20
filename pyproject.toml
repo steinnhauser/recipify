@@ -65,3 +65,9 @@ addopts = "-v"
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["recipify"]
+
+[tool.coverage.report]
+show_missing = true

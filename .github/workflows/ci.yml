@@ -1,9 +1,16 @@
+# Lints, type-checks and tests every push and pull request. On main, a passing run then
+# publishes site/ to GitHub Pages:
+#   /           the private collection, encrypted locally with `uv run recipify lock` (committed)
+#   /demo/      a public demo built here from examples/recipes with `uv run recipify demo`
+#   /coverage/  the pytest coverage report, plus badge.json for the README badge
+# Recipes from the private collection never reach the repository in plain text.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,4 +34,75 @@ jobs:
       - name: Type check
         run: uv run mypy src
       - name: Test
-        run: uv run pytest -q
+        run: uv run pytest -q --cov --cov-report=term --cov-report=html --cov-report=xml --cov-report=json
+
+      - name: Write the coverage badge
+        if: matrix.python == '3.13'
+        run: |
+          jq '.totals.percent_covered as $p | {
+                schemaVersion: 1,
+                label: "coverage",
+                message: (.totals.percent_covered_display + "%"),
+                color: (if $p >= 90 then "brightgreen" elif $p >= 75 then "green"
+                        elif $p >= 60 then "yellow" else "red" end)
+              }' coverage.json > htmlcov/badge.json
+          cp coverage.xml htmlcov/
+          echo "### Coverage: $(jq -r .message htmlcov/badge.json)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the coverage report
+        if: matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to publish an unencrypted page
+        run: |
+          for f in site/*.html; do
+            grep -q '<script id="payload" type="application/json">' "$f" \
+              || { echo "::error file=$f::not an encrypted page (run: uv run recipify lock)"; exit 1; }
+          done
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Check the page opens with ENCRYPTION_KEY
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          if [ -z "$ENCRYPTION_KEY" ]; then
+            echo "::warning::ENCRYPTION_KEY secret not set; skipping the key check"
+          else
+            uv run recipify lock --verify
+          fi
+
+      - name: Build the public demo
+        run: uv run recipify demo --out site/demo/index.html
+
+      - name: Add the coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: site/coverage
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

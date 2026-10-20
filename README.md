@@ -1,6 +1,7 @@
 # recipify
 
 [![CI](https://github.com/steinnhauser/recipify/actions/workflows/ci.yml/badge.svg)](https://github.com/steinnhauser/recipify/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fsteinnhm.com%2Frecipify%2Fcoverage%2Fbadge.json)](https://steinnhm.com/recipify/coverage/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -88,7 +89,7 @@ uv run recipify lock path/to/recipes.html --show-link \
 git add site/index.html && git commit -m "Update collection" && git push
 ```
 
-Pushing triggers [`pages.yml`](.github/workflows/pages.yml). It refuses to publish any root page that isn't encrypted, checks that the page opens with the `ENCRYPTION_KEY` repository secret (if set), builds the public demo and deploys.
+Every push to `main` runs [`ci.yml`](.github/workflows/ci.yml), and once the checks pass, its deploy job publishes the site. The job refuses to publish any root page that isn't encrypted, checks that the page opens with the `ENCRYPTION_KEY` repository secret (if set), builds the public demo, adds the coverage report and deploys. To redeploy without a new commit, run the workflow by hand from the Actions tab.
 
 When someone opens the link, the page takes the key out of the address bar, decrypts in the browser with WebCrypto and remembers the key on that device. Visitors without the key see a key prompt.
 
@@ -116,7 +117,7 @@ src/recipify/
   viewer.py              viewer builder (+ viewer_template.html)
   lock.py                encryption for publishing (+ locked_template.html)
 examples/recipes/        sample recipes for the demo (one folder per course)
-site/                    published to GitHub Pages (encrypted collection; demo built in CI)
+site/                    published to GitHub Pages (encrypted collection; demo and coverage report built in CI)
 ```
 
 ## Development
@@ -124,11 +125,12 @@ site/                    published to GitHub Pages (encrypted collection; demo b
 ```bash
 uv sync
 uv run pytest
+uv run pytest --cov --cov-report=html          # coverage report in htmlcov/index.html
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run mypy src
 ```
 
-CI runs all of these on Python 3.12 and 3.13.
+CI runs all of these on Python 3.12 and 3.13. The coverage report from each run is attached to it as the `coverage-report` artifact, and the report for `main` is published at [steinnhm.com/recipify/coverage](https://steinnhm.com/recipify/coverage/).
 
 ## License
 
