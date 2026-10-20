@@ -312,3 +312,38 @@ def test_locked_page_roundtrip():
     assert decrypt_page(locked, "s3cret/+&=key") == page
     with pytest.raises(InvalidTag):
         decrypt_page(locked, "wrong")
+
+
+def test_process_limit_and_empty_extraction(project, make_docx, monkeypatch):
+    recipes, outputs = project
+    for name in ("a", "b", "c"):
+        make_docx(recipes / f"{name}.docx", name.upper())
+    meta = Metadata.load_latest(outputs)
+    pipeline.classify_all(meta, recipes)
+    pipeline.process(meta, recipes, outputs, limit=2, run_id="run1")
+    done = {k for k, e in meta.recipes.items() if e["versions"]}
+    assert done == {"a.docx", "b.docx"}
+
+    monkeypatch.setitem(pipeline.EXTRACTORS, Category.DOCX_FILES, ("blank", lambda p: " \n"))
+    pipeline.process(meta, recipes, outputs, run_id="run2")
+    failed = meta.recipes["c.docx"]["versions"][-1]
+    assert failed["status"] == "failed" and "no content" in failed["error"]
+    assert "## Failures" in (outputs / "run2" / "CHANGELOG.md").read_text()
+
+
+def test_passes_skip_missing_files(project, make_docx, processed, tmp_path):
+    from recipify import viewer
+
+    recipes, outputs = project
+    make_docx(recipes / "gone.docx", "Kaka\n\n200 g smjór " * 30)
+    meta = processed(recipes, outputs)
+    pipeline.enrich(meta, outputs, {}, run_id="run2")
+    for snapshot in outputs.glob("*/docx_files/gone.md"):
+        snapshot.unlink()
+    (recipes / "gone.docx").unlink()
+
+    assert pipeline.sort_files(meta, recipes, tmp_path / "sorted") == 0
+    assert pipeline.tidy_run(meta, outputs, run_id="run3") is None
+    assert pipeline.spelling_run(meta, outputs, {"smjór": "smjör"}, run_id="run3") is None
+    assert pipeline.enrich(meta, outputs, {}, run_id="run3") is None
+    assert viewer.pick_sample(meta, outputs) == []

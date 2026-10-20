@@ -130,7 +130,7 @@ uv run ruff check src tests && uv run ruff format --check src tests
 uv run mypy src
 ```
 
-CI runs all of these on Python 3.12 and 3.13. The coverage report from each run is attached to it as the `coverage-report` artifact, and the report for `main` is published at [steinnhm.com/recipify/coverage](https://steinnhm.com/recipify/coverage/).
+CI runs all of these on Python 3.12 and 3.13, and fails if test coverage drops below 96%. The coverage report from each run is attached to it as the `coverage-report` artifact, and the report for `main` is published at [steinnhm.com/recipify/coverage](https://steinnhm.com/recipify/coverage/).
 
 ## License
 
