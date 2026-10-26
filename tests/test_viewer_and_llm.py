@@ -1,0 +1,140 @@
+from types import SimpleNamespace
+
+import pytest
+
+from recipify import viewer
+from recipify.categories import Category
+from recipify.lock import decrypt_page, encrypt_page
+from recipify.models import Assessment, Catalog, Entry, Ingredient, Kind, Recipe, Section, Tier
+from recipify.structure import llm
+
+
+def _entry(**kw) -> Entry:
+    recipe = Recipe(
+        title="Ostakaka",
+        intro=["Fyrir 10."],
+        sections=[
+            Section(
+                name="Ostakrem",
+                ingredients_label="Hráefni:",
+                ingredients=[
+                    Ingredient(
+                        text="1,5 kg ostur", amount=1.5, quantity="1,5", unit="kg", name="ostur"
+                    ),
+                    Ingredient(
+                        text="ca. 2-3 stk egg",
+                        amount=2,
+                        amount_max=3,
+                        quantity="ca. 2-3",
+                        unit="stk",
+                        name="egg",
+                    ),
+                    Ingredient(
+                        text="100% - 1000 g epli",
+                        amount=100,
+                        quantity="100",
+                        unit="%",
+                        name="- 1000 g epli",
+                    ),
+                    Ingredient(text="Salt <b>", name="Salt <b>"),
+                ],
+                method_label="Aðferð:",
+                steps=["Hrært.", "Kælt."],
+                notes=["Geymsluþol: 4 dagar."],
+            ),
+            Section(method_label="Aðferð", steps=["Borið fram."]),
+        ],
+    )
+    defaults = dict(
+        id="0123456789ab",
+        source="Eftirréttir/Ostakaka.pdf",
+        category=Category.READABLE_PDFS,
+        kind=Kind.RECIPE,
+        pages=1,
+        title="Ostakaka",
+        labels={"course": ["dessert"], "diet": ["sweet"]},
+        assessment=Assessment(tier=Tier.READY),
+        recipe=recipe,
+    )
+    return Entry(**(defaults | kw))
+
+
+def test_ingredient_and_section_markup():
+    html = viewer.recipe_html(_entry())
+    assert '<span class="v" data-a="1.5" data-comma="">1,5</span> kg' in html
+    assert 'data-a="2" data-b="3" data-p="ca. "' in html
+    assert '<span class="v">100</span> %' in html  # percentages do not scale
+    assert 'class="bare"' in html and "Salt &lt;b&gt;" in html
+    assert "<h4>Hráefni</h4>" in html and "<h4>Aðferð</h4>" in html
+    assert "<ol><li>Hrært.</li><li>Kælt.</li></ol>" in html
+    assert '<p class="step">Borið fram.</p>' in html
+    assert '<p class="note">Geymsluþol: 4 dagar.</p>' in html
+    assert '<div class="intro"><p>Fyrir 10.</p></div>' in html
+
+
+def test_render_page():
+    other = _entry(
+        id="ffffffffffff", title="Annað", category=Category.DOCX_FILES, pages=None, labels={}
+    )
+    hidden = _entry(id="eeeeeeeeeeee", title="Falið", assessment=Assessment(tier=Tier.REVIEW))
+    page = viewer.render(Catalog(entries=[_entry(), other, hidden]), "Uppskriftir")
+    assert "<title>Uppskriftir</title>" in page
+    assert page.count('<article id="r') == 2 and "Falið" not in page
+    assert "From Ostakaka.pdf (PDF, 1 page)." in page
+    assert "From Ostakaka.pdf (Word document)." in page
+    assert "Other (1)" in page and "Dessert (1)" in page
+    assert "&quot;recipes&quot;: 2" in page
+
+
+def test_lock_roundtrip():
+    locked = encrypt_page("<p>secret</p>", "key", title="Locked")
+    assert "secret" not in locked and "<title>Locked</title>" in locked
+    assert decrypt_page(locked, "key") == "<p>secret</p>"
+    with pytest.raises(ValueError):
+        encrypt_page("x", "")
+
+
+def test_llm_structurer(monkeypatch: pytest.MonkeyPatch):
+    answer = llm._Recipe(
+        title="Ostakaka",
+        intro=[],
+        sections=[
+            llm._Section(
+                name="Krem",
+                ingredients_label="",
+                ingredients=["500 g ostur", "Salt"],
+                method_label="Aðferð:",
+                steps=["Hrært."],
+                notes=[],
+            )
+        ],
+    ).model_dump_json()
+    seen = {}
+
+    class FakeChat:
+        def complete(self, **kw):
+            seen.update(kw)
+            message = SimpleNamespace(content=answer)
+            usage = SimpleNamespace(prompt_tokens=120, completion_tokens=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+
+    import mistralai.client
+
+    import recipify.extract.ocr as ocr
+
+    monkeypatch.setattr(
+        mistralai.client, "Mistral", lambda api_key: SimpleNamespace(chat=FakeChat())
+    )
+    monkeypatch.setattr(ocr, "api_key", lambda: "k")
+    recipe, usage = llm.structure("Ostakaka\nKrem\n500 g ostur\nSalt\nAðferð:\nHrært.", "x")
+    assert usage == {"prompt_tokens": 120, "completion_tokens": 0}
+    assert recipe.title_in_text
+    assert recipe.sections[0].ingredients[0].amount == 500
+    assert recipe.sections[0].ingredients[1].amount is None
+    assert seen["temperature"] == 0 and seen["response_format"].type == "json_schema"
+    recipe, _ = llm.structure("Krem\n500 g ostur", "Ostakaka")
+    assert not recipe.title_in_text  # the model borrowed the file name
+
+    answer = None
+    with pytest.raises(ValueError, match="no JSON"):
+        llm.structure("x", "y")

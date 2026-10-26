@@ -1,349 +1,344 @@
+import json
+import os
 from pathlib import Path
 
-from docx import Document
+import pytest
 
 from recipify import pipeline
+from recipify.assess import assess, detect_language, text_quality
 from recipify.categories import Category
-from recipify.classify import classify
-from recipify.metadata import Metadata
-from recipify.naming import rename_plan, slugify, standard_name
-from recipify.quality import REVIEW_THRESHOLD, Quality, detect_language, score_text
-
-
-def test_slugify_icelandic():
-    assert slugify("Þorskur & hörpuskel (tasting)") == "thorskur-horpuskel-tasting"
-
-
-def test_standard_name_copy_and_suffix():
-    assert standard_name(Path("Advanced Pastry 10 (1).JPEG")) == "advanced-pastry-10-copy1.jpg"
-
-
-def test_rename_plan_resolves_collisions(tmp_path: Path):
-    a, b = tmp_path / "A b.pdf", tmp_path / "a-b.pdf"
-    new_names = {
-        p.name if p not in dict(rename_plan([a, b])) else dict(rename_plan([a, b]))[p]
-        for p in (a, b)
-    }
-    assert len(new_names) == 2
-
-
-def make_docx(path: Path, text: str) -> None:
-    doc = Document()
-    if text:
-        doc.add_paragraph(text)
-    doc.save(str(path))
-
-
-def test_classify(tmp_path: Path):
-    (tmp_path / "empty.pdf").write_bytes(b"")
-    (tmp_path / "bad.pdf").write_bytes(b"not a pdf")
-    (tmp_path / "~$lock.docx").write_bytes(b"x")
-    (tmp_path / "a.odt").write_bytes(b"x")
-    (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xe0rest")
-    make_docx(tmp_path / "ok.docx", "Pancakes")
-    make_docx(tmp_path / "blank.docx", "")
-    expect = {
-        "empty.pdf": Category.EMPTY_OR_CORRUPTED,
-        "bad.pdf": Category.EMPTY_OR_CORRUPTED,
-        "~$lock.docx": Category.IGNORED,
-        "a.odt": Category.LEGACY_OFFICE,
-        "p.jpg": Category.IMAGE_FILES,
-        "ok.docx": Category.DOCX_FILES,
-        "blank.docx": Category.EMPTY_OR_CORRUPTED,
-    }
-    for name, cat in expect.items():
-        assert classify(tmp_path / name).category == cat, name
-
-
-def test_process_versions_outputs(tmp_path: Path):
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    make_docx(recipes / "Pönnukökur.docx", "Pancakes")
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-
-    pipeline.process(meta, recipes, outputs, run_id="run1")
-    assert (outputs / "run1" / "docx_files" / "ponnukokur.md").read_text().strip() == "Pancakes"
-    pipeline.process(meta, recipes, outputs, run_id="run2")  # unchanged: skipped
-    pipeline.process(meta, recipes, outputs, force=True, run_id="run3")
-    latest = Metadata.load_latest(outputs)
-    versions = latest.recipes["Pönnukökur.docx"]["versions"]
-    assert [v["run_id"] for v in versions] == ["run1", "run3"]
-    assert latest.recipes["Pönnukökur.docx"]["original_format"] == "docx"
-    # every run keeps its own metadata snapshot and changelog
-    assert (
-        len(Metadata(outputs / "run1" / "metadata.json").recipes["Pönnukökur.docx"]["versions"])
-        == 1
-    )
-    assert "Pönnukökur.docx" in (outputs / "run3" / "CHANGELOG.md").read_text()
-    assert not (outputs / "run2").exists()
-    assert (outputs / "run1").exists() and (outputs / "run3").exists()
-
-
-def test_register_manual_adds_version(tmp_path: Path):
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    make_docx(recipes / "a.docx", "x")
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    md = tmp_path / "m.md"
-    md.write_text("# hi\n")
-    q = Quality(0.9, method="manual", notes="checked")
-    out = pipeline.register_manual(
-        meta, outputs, "a.docx", md, "copilot-vision", run_id="r1", language="is", quality=q
-    )
-    assert (outputs / out).read_text() == "# hi\n"
-    v = Metadata(outputs / "r1" / "metadata.json").recipes["a.docx"]["versions"][0]
-    assert v["processor"] == "copilot-vision"
-    assert v["quality"] == {"score": 0.9, "method": "manual", "flags": [], "notes": "checked"}
-    assert (outputs / "r1" / "CHANGELOG.md").exists()
-
-
-ICELANDIC = (
-    "Soðið niður þar til bragðið er komið. Setjið smjör og salt í pottinn með hveiti og sykri."
+from recipify.curation import Curation
+from recipify.extract import Engine
+from recipify.inventory import scan, triage
+from recipify.labels import detect_labels, refine_title
+from recipify.models import (
+    Extraction,
+    Ingredient,
+    Kind,
+    Recipe,
+    Section,
+    SourceFile,
+    Structured,
+    Tier,
 )
+from recipify.report import reason_group
+from recipify.store import Workspace, write_json
+from recipify.structure import STRUCTURERS, Structurer
 
 
-def test_detect_language():
-    assert detect_language(ICELANDIC) == "is"
+def _source(**kw) -> SourceFile:
+    defaults = dict(
+        path="a.pdf",
+        sha256="ab" * 32,
+        size=1,
+        mtime=0.0,
+        category=Category.READABLE_PDFS,
+        reason="",
+    )
+    return SourceFile(**(defaults | kw))
+
+
+def test_inventory_triage_and_duplicates(ws: Workspace):
+    inv = scan(ws.sources)
+    files = inv.files
+    assert files["copy/Tartdeig (1).pdf"].duplicate_of == "Bakarí/Tartdeig.pdf"
+    assert files["Handbook.pdf"].kind == Kind.BOOK and files["Handbook.pdf"].pages == 10
+    assert files["photo.jpg"].category == Category.IMAGE_FILES
+    assert len(inv.canonical()) == 4
+
+    seen: list[str] = []
+    again = scan(ws.sources, inv, Curation(kind={"Skyrkaka": Kind.REFERENCE}), seen.append)
+    assert again.files["Eftirréttir/Skyrkaka.docx"].kind == Kind.REFERENCE
+    assert len(seen) == 5
+    path = ws.sources / "photo.jpg"
+    os.utime(path, (1, 1))  # changed files are read again
+    assert scan(ws.sources, inv).files["photo.jpg"].mtime == 1
+
+
+def test_triage():
+    assert triage("Missi Lava.xlsx", Category.SPREADSHEETS, None, Curation()) == Kind.REFERENCE
+    assert triage("Hópaseðill.pdf", Category.READABLE_PDFS, 1, Curation()) == Kind.REFERENCE
+    assert triage("Bók.epub", Category.EPUB_BOOKS, None, Curation()) == Kind.BOOK
+    assert triage("Kaka.pdf", Category.READABLE_PDFS, 2, Curation()) == Kind.RECIPE
+
+
+def test_stages_cache_and_resume(ws: Workspace):
+    inv = pipeline.run_inventory(ws, Curation())
+    results: list[tuple[str, str]] = []
+    first = pipeline.run_extract(ws, inv, on_result=lambda p, s: results.append((p, s)))
+    assert (first.done, first.failed) == (2, 0)  # the PDF and the docx; copy, book, photo skipped
+    assert sorted(results) == [("Bakarí/Tartdeig.pdf", "ok"), ("Eftirréttir/Skyrkaka.docx", "ok")]
+    assert pipeline.run_extract(ws, inv).skipped == 2
+    assert pipeline.run_extract(ws, inv, force=True, limit=1).done == 1
+
+    st = pipeline.run_structure(ws, inv, on_result=lambda p, s: None)
+    assert st.done == 2
+    assert pipeline.run_structure(ws, inv).skipped == 2
+    assert pipeline.run_structure(ws, inv, force=True, limit=1).done == 1
+    assert pipeline.run_structure(ws, inv, only={"Bakarí/Tartdeig.pdf"}, force=True).done == 1
+
+    catalog = pipeline.build_catalog(ws, inv, Curation(titles={"Skyrkaka": "Skyrkaka góða"}))
+    by_source = {e.source: e for e in catalog.entries}
+    tart = by_source["Bakarí/Tartdeig.pdf"]
+    assert tart.assessment.tier == Tier.READY, tart.assessment.reasons
+    assert tart.assessment.fidelity == tart.assessment.precision == 1.0
+    assert tart.duplicates == ["copy/Tartdeig (1).pdf"]
+    assert tart.labels["course"] == ["bread & pastry"]
+    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v1"
+    assert by_source["Eftirréttir/Skyrkaka.docx"].title == "Skyrkaka góða"
+    assert by_source["Handbook.pdf"].assessment.reasons == [
+        "book (10 pages): not split into recipes yet"
+    ]
+    assert by_source["photo.jpg"].assessment.reasons == ["needs OCR, not run yet"]
+    report = ws.report_path.read_text()
+    assert "**1 recipes ready**" in report and "## Review list" in report
+    log = [json.loads(line) for line in (ws.data / "runs.jsonl").read_text().splitlines()]
+    assert [r["stage"] for r in log][:2] == ["inventory", "extract"]
+
+
+def test_failures_are_reported_not_fatal(ws: Workspace, monkeypatch: pytest.MonkeyPatch):
+    inv = pipeline.run_inventory(ws, Curation())
+
+    def broken(path: Path):
+        raise ValueError("cannot read")
+
+    monkeypatch.setitem(pipeline.LOCAL, Category.DOCX_FILES, Engine("broken", 1, broken))
+    monkeypatch.setitem(
+        pipeline.LOCAL, Category.READABLE_PDFS, Engine("empty", 1, lambda p: (" ", {}))
+    )
+    result = pipeline.run_extract(ws, inv)
+    assert result.failed == 2
+    assert sorted(e[1] for e in result.errors) == [
+        "ValueError: cannot read",
+        "ValueError: no text found",
+    ]
+
+
+def test_costly_engines_never_rerun(ws: Workspace, monkeypatch: pytest.MonkeyPatch):
+    inv = pipeline.run_inventory(ws, Curation())
+    photo = inv.files["photo.jpg"]
+    calls: list[Path] = []
+
+    def fake_ocr(path: Path):
+        calls.append(path)
+        return "Rauðrófur\n4 rauðrófur\n200 g skyr\nAðferð:\nBakað.", {}
+
+    ocr = Engine("ocr", 1, fake_ocr, costly=True)
+    monkeypatch.setattr(
+        pipeline, "engine_for", lambda c, _: ocr if c == Category.IMAGE_FILES else None
+    )
+    pipeline.run_extract(ws, inv, use_ocr=True)
+    pipeline.run_extract(ws, inv, use_ocr=True, force=True)
+    assert len(calls) == 1
+    assert pipeline.best_extraction(ws, photo).engine == "ocr"
+
+    out = pipeline.register(ws, photo, "Rauðrófur\n2 egg", "vision", 0.9, "by hand")
+    assert out.name == "vision@v1.json"
+    llm_calls: list[str] = []
+
+    def fake_llm(text: str, title: str):
+        llm_calls.append(text)
+        return Recipe(title="Rauðrófur"), {"prompt_tokens": 10}
+
+    monkeypatch.setitem(STRUCTURERS, "fake", Structurer("fake", 1, fake_llm, costly=True))
+    first = pipeline.run_structure(ws, inv, engine="fake")
+    assert first.usage == {"prompt_tokens": 10}  # only the photo has text in this test
+    assert pipeline.run_structure(ws, inv, engine="fake", force=True).skipped == 1
+    assert len(llm_calls) == 1
+    catalog = pipeline.build_catalog(ws, inv, Curation())
+    photo_entry = next(e for e in catalog.entries if e.source == "photo.jpg")
+    assert photo_entry.assessment.tier == Tier.REVIEW
+    assert "read from images" in photo_entry.assessment.reasons[0]
+
+
+def test_structure_failures(ws: Workspace, monkeypatch: pytest.MonkeyPatch):
+    inv = pipeline.run_inventory(ws, Curation())
+    pipeline.run_extract(ws, inv)
+
+    def broken(text: str, title: str):
+        raise RuntimeError("model down")
+
+    monkeypatch.setitem(STRUCTURERS, "broken", Structurer("broken", 1, broken))
+    result = pipeline.run_structure(ws, inv, engine="broken")
+    assert result.failed == 2 and "model down" in result.errors[0][1]
+    catalog = pipeline.build_catalog(ws, inv, Curation())
+    tart = next(e for e in catalog.entries if e.source == "Bakarí/Tartdeig.pdf")
+    assert tart.assessment.reasons == ["not structured yet"]
+
+
+def test_twins_titles_and_curated_tiers(tmp_path: Path, make_pdf, make_docx):
+    sources = tmp_path / "src"
+    steps = (
+        "Laxinn er snyrtur og beinhreinsaður.\nSaltinu og sykrinum blandað saman.\n"
+        "Stráð yfir laxinn og hann grafinn\ní kæli í tvo sólarhringa áður en hann er skorinn."
+    )
+    body = ["Graflax", "2 kg lax\n100 g salt\nAðferð:\n" + steps]
+    make_docx(sources / "Graflax.docx", *body)
+    make_pdf(sources / "Graflax.pdf", ["\n".join(body)])
+    make_pdf(
+        sources / "Spa" / "Graflax.pdf",
+        ["Graflax\n1 kg lax\n50 g sykur\nAðferð:\nGrafið.\n" + steps],
+    )
+    make_pdf(
+        sources / "Lava" / "Graflax.pdf",
+        ["Graflax\n3 kg lax\n50 g dill\nAðferð:\nGrafið vel.\n" + steps],
+    )
+    make_pdf(
+        sources / "Graflax (hópar).pdf",
+        ["Graflax\n9 kg lax\n9 g salt\nAðferð:\nFyrir hópa.\n" + steps],
+    )
+    make_pdf(sources / "Hidden.pdf", ["Hidden\n1 kg lax\n9 g salt\nAðferð:\nHidden.\n" + steps])
+    ws = Workspace(sources, tmp_path / "data")
+    inv = pipeline.run_inventory(ws, Curation())
+    pipeline.run_extract(ws, inv)
+    pipeline.run_structure(ws, inv)
+    curation = Curation(tier={"Hidden": Tier.REVIEW}, titles={"Graflax (hópar)": "Graflax"})
+    catalog = pipeline.build_catalog(ws, inv, curation)
+    ready = {e.source: e.title for e in catalog.by_tier(Tier.READY)}
+    assert ready == {
+        "Graflax.docx": "Graflax (top folder)",  # the curated "Graflax" keeps its title
+        "Spa/Graflax.pdf": "Graflax (Spa)",
+        "Lava/Graflax.pdf": "Graflax (Lava)",
+        "Graflax (hópar).pdf": "Graflax",
+    }
+    twin = next(e for e in catalog.entries if e.source == "Graflax.pdf")
+    assert twin.assessment.reasons == ["same recipe as Graflax.docx"]
+    hidden = next(e for e in catalog.entries if e.source == "Hidden.pdf")
+    assert hidden.assessment.tier == Tier.REVIEW
+    assert hidden.assessment.reasons == ["tier set by hand in curation.json"]
+
+
+def test_assessment_reasons():
+    ingredients = [Ingredient(text=f"{n} g salt", amount=n) for n in (1, 2)]
+    recipe = Recipe(
+        title="Sósa", sections=[Section(ingredients=ingredients, steps=["Hrært saman í potti."])]
+    )
+    text = "Sósa\n1 g salt\n2 g salt\nHrært saman í potti."
+    structured = Structured(sha256="x", engine="rules", version=1, extraction="e", recipe=recipe)
+    extraction = Extraction(
+        sha256="x", engine="e", version=1, text=text, checks={"order_agreement": 0.5}
+    )
+    a = assess(_source(), extraction, structured)
+    assert a.tier == Tier.REVIEW
+    assert a.reasons == [
+        "reading order uncertain (50.0% of lines agree)",
+        "very little text (11 words)",
+    ]
+
+    extraction.text += " invented"
+    extraction.checks = {}
+    assert "text differs from the source" in assess(_source(), extraction, structured).reasons[0]
+
+    unmeasured = recipe.model_copy(deep=True)
+    unmeasured.sections[0].ingredients = [Ingredient(text="salt"), Ingredient(text="pipar")]
+    unmeasured.intro = ["Long intro words " * 30]
+    s2 = structured.model_copy(update={"recipe": unmeasured})
+    reasons = assess(_source(category=Category.SPREADSHEETS), extraction, s2).reasons
+    assert any("plating guide" in r for r in reasons)
+    assert any("unstructured" in r for r in reasons)
+    assert reasons[0].startswith("spreadsheet")
+
+    empty = structured.model_copy(update={"recipe": Recipe(title="x")})
+    reasons = assess(_source(category=Category.IMAGE_FILES), extraction, empty).reasons
+    assert reasons[:1] == ["read from images: cannot be checked against a text layer"]
+    assert "no ingredient list found" in reasons and "no method found" in reasons
+
+    huge = Extraction(sha256="x", engine="e", version=1, text="orð " * 4000)
+    big = structured.model_copy(update={"recipe": Recipe(title="x", intro=["orð " * 4000])})
+    assert assess(_source(), huge, big).tier == Tier.EXCLUDED
+    school = Extraction(sha256="x", engine="e", version=1, text="Nemandi: Jón\n2 egg")
+    assert assess(_source(), school, structured).reasons == ["course material: a school assignment"]
+
+
+@pytest.mark.parametrize(
+    ("file", "reason"),
+    [
+        (dict(duplicate_of="b.pdf"), "duplicate of b.pdf"),
+        (dict(kind=Kind.BOOK), "book: not split into recipes yet"),
+        (dict(kind=Kind.REFERENCE), "reference material, not a recipe"),
+        (dict(category=Category.IGNORED, reason="lock file"), "ignored: lock file"),
+        (dict(category=Category.DOCX_FILES), "not extracted yet"),
+    ],
+)
+def test_exclusions(file: dict, reason: str):
+    assert assess(_source(**file), None, None).reasons == [reason]
+
+
+def test_not_structured_yet():
+    extraction = Extraction(sha256="x", engine="e", version=1, text="t")
+    assert assess(_source(), extraction, None).reasons == ["not structured yet"]
+
+
+def test_language_and_text_quality():
+    assert detect_language("Smjör og sykur hrært saman með eggjum í skál") == "is"
+    assert detect_language("Mix the butter and sugar with the eggs in a bowl") == "en"
+    assert detect_language("butter og sykur and salt með the") == "mixed"
+    assert detect_language("xyz qwe rty uio pas") == "unknown"
+    assert detect_language("too short") == "unknown"
+    assert text_quality("ok") == (0.1, ["almost_no_text"])
+    assert text_quality("Smjör og sykur hrært saman með eggjum")[0] == 1.0
+    score, flags = text_quality(
+        "S m j ö r o g s y k u r h r æ r t " + "Ã© " * 3 + "xkcdwq rtyplkjh"
+    )
+    assert score < 0.9 and {"broken spacing", "mojibake", "non-words"} <= set(flags)
+    assert text_quality("NATO RSVP HTML og smjör")[0] == 1.0
+
+
+def test_labels_and_titles():
+    recipe = Recipe(
+        title="Lambaskankar",
+        intro=["Ribeye steik 300 gr. Borið fram með sósu og mörgu fleira góðgæti " * 5],
+        sections=[Section(name="Sósa", ingredients=[Ingredient(text="2 dl kjúklingabaunir")])],
+    )
+    labels = detect_labels("Lambaskankar", "Lava/Aðalréttir/x.pdf", recipe)
+    assert labels["course"] == ["main"]
+    assert "vegetarian" not in labels["diet"] and "meat" in labels["diet"]
+    assert "chicken" not in labels["ingredients"] and "legumes" in labels["ingredients"]
+    vegan = Recipe(title="Salat", intro=["Fallegt salat með gúrku og tómötum. " * 10])
+    assert detect_labels("Glútenlaust salat", "x", vegan)["diet"] == [
+        "vegetarian",
+        "vegan",
+        "gluten-free",
+    ]
+    cake = Recipe(
+        title="Kaka",
+        sections=[Section(ingredients=[Ingredient(text="200 g smjör")])],
+        intro=["Kaka bökuð " * 30],
+    )
+    assert detect_labels("Súkkulaðikaka gluten free", "Eftirréttir/x", cake)["diet"] == [
+        "vegetarian",
+        "gluten-free",
+        "sweet",
+    ]
+    italian = Recipe(title="x", intro=["risotto parmesan pesto"])
+    assert detect_labels("Risotto", "", italian)["cuisine"] == ["Italian"]
+    salmon = Recipe(title="x", intro=["lax " * 100])
+    assert "seafood" in detect_labels("x", "", salmon)["diet"]
+
+    assert refine_title("S¢sa_1_5 (2)", recipe, "x", {}) == "Sósa 1.5"
+    assert refine_title("anything", recipe, "stem", {"stem": "Curated"}) == "Curated"
+    assert refine_title("Untitled", recipe, "x", {}) == "Sósa"
+    assert refine_title("PICKLED HERRING", recipe, "x", {}) == "Pickled herring"
+    assert refine_title("‚bbq sósa", recipe, "x", {}) == "Bbq sósa"
+
+
+def test_report_reason_groups():
     assert (
-        detect_language("Mix the flour and sugar with the butter until smooth, then bake.") == "en"
+        reason_group("reading order uncertain (97.0% of lines agree)") == "reading order uncertain"
     )
-    assert detect_language("hi") == "unknown"
+    assert reason_group("duplicate of x.pdf") == "identical copy of another file"
+    assert reason_group("book (10 pages): not split into recipes yet") == "book"
 
 
-def test_quality_scores_garbage_low():
-    good = score_text(ICELANDIC * 3)
-    garbled = score_text("xkqzt wrbnp ghjkl p q r s t u v w x y z mnbvc fdsgh " * 4)
-    spaced = score_text("S o ð i ð n i ð u r þ a r t i l b r a g ð i ð e r " * 3)
-    mojibake = score_text("Sm\ufffdr og sl\ufffdt \ufffd pottinn með salti og pipar og hveiti " * 3)
-    assert good.score >= 0.9 and not good.flags
-    assert garbled.score < REVIEW_THRESHOLD and "nonwords" in garbled.flags
-    assert spaced.score < REVIEW_THRESHOLD and "broken_spacing" in spaced.flags
-    assert "mojibake" in mojibake.flags
-    assert score_text("").score < REVIEW_THRESHOLD
-
-
-def test_new_version_carries_forward_previous_outputs(tmp_path: Path):
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    make_docx(recipes / "a.docx", "Alpha")
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, run_id="run1")
-
-    make_docx(recipes / "b.docx", "Beta")
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, run_id="run2")
-
-    # run2 is a complete tree: the unchanged file is copied, the new one converted
-    assert (outputs / "run2" / "docx_files" / "a.md").read_text().strip() == "Alpha"
-    assert (outputs / "run2" / "docx_files" / "b.md").read_text().strip() == "Beta"
-    assert (outputs / "run1" / "docx_files" / "a.md").exists()  # history untouched
-    latest = Metadata.load_latest(outputs)
-    carried = latest.recipes["a.docx"]["versions"][-1]
-    assert carried["carried_from"] == "run1" and carried["output"].startswith("run2/")
-    log = (outputs / "run2" / "CHANGELOG.md").read_text()
-    assert "1 new recipe file(s) converted" in log and "1 unchanged output(s)" in log
-
-
-def test_spreadsheet_to_markdown(tmp_path: Path):
-    from openpyxl import Workbook
-
-    from recipify.extractors.office import spreadsheet_to_markdown
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Dough"
-    ws.append(["Ingredient", "Grams"])
-    ws.append(["Flour", 500.0])
-    ws.append([None, None])
-    wb.save(tmp_path / "dough.xlsx")
-    md = spreadsheet_to_markdown(tmp_path / "dough.xlsx")
-    assert "## Dough" in md and "| Flour | 500 |" in md
-
-
-def test_misnamed_zip_formats_are_sniffed(tmp_path: Path):
-    import zipfile
-
-    from recipify.extractors.epub import epub_to_markdown
-
-    epub = tmp_path / "book.pdf"  # an EPUB with a .pdf extension
-    with zipfile.ZipFile(epub, "w") as zf:
-        zf.writestr("mimetype", "application/epub+zip")
-        zf.writestr(
-            "META-INF/container.xml",
-            '<container><rootfiles><rootfile full-path="OEBPS/c.opf"/></rootfiles></container>',
-        )
-        zf.writestr(
-            "OEBPS/c.opf",
-            '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
-            '<item id="a" href="a.html"/></manifest><spine><itemref idref="a"/></spine></package>',
-        )
-        zf.writestr("OEBPS/a.html", "<html><body><h1>Soup</h1><p>Boil water.</p></body></html>")
-    assert classify(epub).category == Category.EPUB_BOOKS
-    md = epub_to_markdown(epub)
-    assert "# Soup" in md and "Boil water." in md
-    make_docx(tmp_path / "menu.pdf", "Menu text")
-    assert classify(tmp_path / "menu.pdf").category == Category.DOCX_FILES
-
-
-def test_viewer_builds_versioned_single_file(tmp_path: Path):
-    from recipify import viewer
-
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    for i in range(3):
-        make_docx(recipes / f"r{i}.docx", f"Recipe {i} with </script> flour " * 20 + str(i))
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, run_id="run1")
-
-    pipeline.enrich(meta, outputs, {"titles": {}, "labels": {}, "kind": {}}, run_id="run2")
-    first = viewer.build(outputs, tmp_path / "viewer", per_group=2)
-    second = viewer.build(outputs, tmp_path / "viewer", per_group=2)
-    assert first.parent.name == "v001" and second.parent.name == "v002"
-    page = first.read_text(encoding="utf-8")
-    assert page.count("</script>") == 2  # data block + app script: payload cannot break out
-    assert "__DATA__" not in page and "http" not in page.split("<script")[0]
-    assert "2 sample recipes" in (first.parent / "NOTES.md").read_text()
-
-
-def test_title_refinement_and_labels():
-    from recipify.labels import detect_labels, fix_mojibake, refine_title
-
-    assert fix_mojibake("BBQ S¢sa") == "BBQ Sósa"
-    assert fix_mojibake("Eftirr\x82tta b¢k") == "Eftirrétta bók"
-    assert fix_mojibake("Sósa") == "Sósa"  # already fine
-    assert (
-        refine_title("Untitled presentation-2", "# x\n\nA la carte æfing\n", "u", {})
-        == "A la carte æfing"
-    )
-    assert refine_title("CHICHARRON EMPANADA DOUGH", "", "c", {}) == "Chicharron empanada dough"
-    assert (
-        refine_title(
-            "20200101120000000", "", "20200101120000000", {"20200101120000000": "Notebook"}
-        )
-        == "Notebook"
-    )
-    text = "Hrísgrjón\n200 g hrísgrjón\n1 laukur\nsveppir 100 g\nsalt og pipar, vatn, olía " * 3
-    lab = detect_labels("Sveppa risotto", "Eldhús/Aðalréttir/x.docx", text)
-    assert (
-        "main" in lab["course"] and "rice" in lab["dish"] and lab["diet"] == ["vegetarian", "vegan"]
-    )
-    meat = detect_labels("Lambasteik", "x.docx", "lambakjöt 500 g, salt, pipar, smjör " * 10)
-    assert "lamb" in meat["ingredients"] and meat["diet"] == ["meat"]
-
-
-def test_enrich_adds_labels_and_keeps_original_name(tmp_path: Path):
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    make_docx(
-        recipes / "Untitled.docx", "# Untitled\n\nSúkkulaðikaka\n\n200 g sykur, 100 g smjör, kaka"
-    )
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, run_id="run1")
-    assert pipeline.enrich(meta, outputs, {}, run_id="run2") == "run2"
-    info = Metadata.load_latest(outputs).recipes["Untitled.docx"]["recipe"]
-    assert info["original_filename"] == "Untitled.docx" and info["title"] != "Untitled"
-    new_file = outputs / "run2" / "docx_files" / "untitled.md"
-    assert new_file.read_text().startswith(f"# {info['title']}")
-    assert (outputs / "run1" / "docx_files" / "untitled.md").read_text().startswith("# Untitled")
-    assert pipeline.enrich(Metadata.load_latest(outputs), outputs, {}, run_id="run3") is None
-
-
-def test_tidy_removes_echoes_and_repeats_but_keeps_raw_version(tmp_path: Path):
-    from recipify.tidy import tidy
-
-    raw = "# K b\n\n# K b\n\n## K b\n\n- Salat\n\n300 gr. Sýrður rjómi\n"
-    assert tidy(raw, "K b") == "# K b\n\n- Salat\n\n300 gr. Sýrður rjómi\n"
-    cells = (
-        "Lunch Menu 1 | Hádegi Lunch Menu 1 | Hádegi Lunch Menu 1 | Hádegi Lunch Menu 1 | Hádegi"
-    )
-    assert tidy(cells, "X").endswith("Lunch Menu 1 | Hádegi\n")
-    page = "\n\n".join(
-        ["Línan eitt hér", "Önnur lína með texta í", "Þriðja línan er löng og skýr"] * 4
-    )
-    assert tidy(page, "X").count("Línan eitt hér") == 1
-
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    make_docx(recipes / "a.docx", "Soup\n\nSoup\n\n200 g onion")
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, run_id="run1")
-    pipeline.enrich(meta, outputs, {}, run_id="run2")
-    assert pipeline.tidy_run(meta, outputs, run_id="run3") in ("run3", None)
-    assert pipeline.tidy_run(Metadata.load_latest(outputs), outputs, run_id="run4") is None
-
-
-def test_spelling_fixes_keep_case_and_raw_version(tmp_path: Path):
-    from recipify.spelling import fix_spelling
-
-    fixes = {"sírtónu": "sítrónu", "smjór": "smjör"}
-    assert fix_spelling("Smjór og SÍRTÓNU, sírtónu.", fixes) == ("Smjör og SÍTRÓNU, sítrónu.", 3)
-    assert fix_spelling("Smjörið", fixes)[1] == 0  # whole words only
-
-    recipes, outputs = tmp_path / "recipes", tmp_path / "outputs"
-    recipes.mkdir()
-    make_docx(recipes / "a.docx", "Kaka\n\n200 g smjór og sírtónu")
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, run_id="run1")
-    assert pipeline.spelling_run(meta, outputs, fixes, run_id="run2") == "run2"
-    assert "smjör og sítrónu" in (outputs / "run2" / "docx_files" / "a.md").read_text()
-    assert "smjór" in (outputs / "run1" / "docx_files" / "a.md").read_text()
-    assert (
-        pipeline.spelling_run(Metadata.load_latest(outputs), outputs, fixes, run_id="run3") is None
-    )
-
-
-def test_locked_page_roundtrip():
-    import pytest
-    from cryptography.exceptions import InvalidTag
-
-    from recipify.lock import decrypt_page, encrypt_page
-
-    page = "<!DOCTYPE html><p>Kjötsúpa</p>"
-    locked = encrypt_page(page, "s3cret/+&=key")
-    assert "Kjötsúpa" not in locked and locked.count("</script>") == 2
-    assert decrypt_page(locked, "s3cret/+&=key") == page
-    with pytest.raises(InvalidTag):
-        decrypt_page(locked, "wrong")
-
-
-def test_process_limit_and_empty_extraction(project, make_docx, monkeypatch):
-    recipes, outputs = project
-    for name in ("a", "b", "c"):
-        make_docx(recipes / f"{name}.docx", name.upper())
-    meta = Metadata.load_latest(outputs)
-    pipeline.classify_all(meta, recipes)
-    pipeline.process(meta, recipes, outputs, limit=2, run_id="run1")
-    done = {k for k, e in meta.recipes.items() if e["versions"]}
-    assert done == {"a.docx", "b.docx"}
-
-    monkeypatch.setitem(pipeline.EXTRACTORS, Category.DOCX_FILES, ("blank", lambda p: " \n"))
-    pipeline.process(meta, recipes, outputs, run_id="run2")
-    failed = meta.recipes["c.docx"]["versions"][-1]
-    assert failed["status"] == "failed" and "no content" in failed["error"]
-    assert "## Failures" in (outputs / "run2" / "CHANGELOG.md").read_text()
-
-
-def test_passes_skip_missing_files(project, make_docx, processed, tmp_path):
-    from recipify import viewer
-
-    recipes, outputs = project
-    make_docx(recipes / "gone.docx", "Kaka\n\n200 g smjór " * 30)
-    meta = processed(recipes, outputs)
-    pipeline.enrich(meta, outputs, {}, run_id="run2")
-    for snapshot in outputs.glob("*/docx_files/gone.md"):
-        snapshot.unlink()
-    (recipes / "gone.docx").unlink()
-
-    assert pipeline.sort_files(meta, recipes, tmp_path / "sorted") == 0
-    assert pipeline.tidy_run(meta, outputs, run_id="run3") is None
-    assert pipeline.spelling_run(meta, outputs, {"smjór": "smjör"}, run_id="run3") is None
-    assert pipeline.enrich(meta, outputs, {}, run_id="run3") is None
-    assert viewer.pick_sample(meta, outputs) == []
+def test_store_helpers(tmp_path: Path):
+    ws = Workspace(tmp_path / "s", tmp_path / "d")
+    assert ws.load_inventory().files == {}
+    with pytest.raises(FileNotFoundError, match="recipify catalog"):
+        ws.load_catalog()
+    write_json(tmp_path / "x.json", {"a": "þ"})
+    assert json.loads((tmp_path / "x.json").read_text()) == {"a": "þ"}
+    with pytest.raises(FileNotFoundError):
+        pipeline.run_inventory(ws, Curation())
+    assert Curation.load(tmp_path / "missing.json") == Curation()
+    (tmp_path / "c.json").write_text('{"kind": {"Missi": "reference"}}', encoding="utf-8")
+    assert Curation.load(tmp_path / "c.json").kind == {"Missi": Kind.REFERENCE}

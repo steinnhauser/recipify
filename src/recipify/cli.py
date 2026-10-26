@@ -1,7 +1,7 @@
-"""Command-line interface."""
+"""Command-line interface: one command per pipeline stage, plus `run` for all of them."""
 
 import os
-import shlex
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Annotated
@@ -14,179 +14,232 @@ from rich.table import Table
 
 from recipify import lock as locking
 from recipify import pipeline, viewer
-from recipify.categories import Category
-from recipify.labels import load_curation
-from recipify.metadata import Metadata, new_run_id
-from recipify.naming import rename_plan
-from recipify.quality import Quality
-from recipify.spelling import load_spelling
+from recipify.curation import Curation
+from recipify.models import Catalog, Inventory, Tier
+from recipify.report import reason_group, tier_table
+from recipify.store import Workspace
+from recipify.structure import STRUCTURERS
 
-app = typer.Typer(help="Convert recipe files into versioned markdown.", no_args_is_help=True)
+app = typer.Typer(
+    help="Turn a folder of recipe documents into verified, structured recipes and a viewer.",
+    no_args_is_help=True,
+)
 console = Console()
 
-RecipesDir = Annotated[Path, typer.Option(help="Source recipe files.")]
-OutputsDir = Annotated[Path, typer.Option(help="Versioned markdown output root.")]
 
-
-def _classified(recipes: Path, outputs: Path, force: bool = False) -> Metadata:
-    if not recipes.is_dir():
-        raise typer.BadParameter(f"{recipes} is not a directory")
-    meta = Metadata.load_latest(outputs)
-    with console.status("Classifying files...") as status:
-        pipeline.classify_all(
-            meta, recipes, lambda p: status.update(f"Classifying {p.name}"), force=force
-        )
-    return meta
-
-
-@app.command()
-def classify(
-    recipes: RecipesDir = Path("recipes"),
-    outputs: OutputsDir = Path("outputs"),
-    force: Annotated[bool, typer.Option(help="Re-classify unchanged files.")] = False,
-    list_category: Annotated[
-        Category | None, typer.Option("--list", help="List files in this category.")
-    ] = None,
+@app.callback()
+def main(
+    ctx: typer.Context,
+    sources: Annotated[
+        Path, typer.Option(envvar="RECIPIFY_SOURCES", help="Folder of source documents.")
+    ] = Path("recipes"),
+    data: Annotated[
+        Path, typer.Option(envvar="RECIPIFY_DATA", help="Pipeline artifacts (cache, catalog).")
+    ] = Path("data"),
 ) -> None:
-    """Classify every source file by extraction difficulty (saved with the next run)."""
-    meta = _classified(recipes, outputs, force)
-    if list_category:
-        for key, e in sorted(meta.recipes.items()):
-            if e["category"] == list_category:
-                console.print(f"{key}  [dim]{e['classification_reason']}[/dim]", highlight=False)
-        return
-    counts = Counter(e["category"] for e in meta.recipes.values())
-    table = Table("Category", "Files")
-    for cat in Category:
-        table.add_row(cat.value, str(counts.get(cat.value, 0)))
+    ctx.obj = Workspace(sources, data)
+
+
+def _ws(ctx: typer.Context) -> Workspace:
+    ws: Workspace = ctx.obj
+    return ws
+
+
+def _curation(ws: Workspace) -> Curation:
+    return Curation.load(ws.data / "curation.json")
+
+
+def _report(path: str, status: str) -> None:
+    mark = "[green]ok[/green]" if status == "ok" else f"[red]failed[/red] {status}"
+    console.print(f"{mark}  {path}", highlight=False)
+
+
+def _inventory(ws: Workspace) -> Inventory:
+    with console.status("Scanning sources...") as status:
+        return pipeline.run_inventory(ws, _curation(ws), lambda p: status.update(f"Reading {p}"))
+
+
+def _print_summary(catalog: Catalog, inv: Inventory) -> None:
+    table = Table("Category", "Files", "Unique", "Ready", "Review", "Excluded")
+    for row in tier_table(catalog, inv):
+        table.add_row(*map(str, row))
     console.print(table)
+    for tier in (Tier.REVIEW, Tier.EXCLUDED):
+        reasons = Counter(
+            reason_group(r) for e in catalog.by_tier(tier) for r in e.assessment.reasons
+        )
+        if reasons:
+            console.print(
+                f"[bold]{tier.value}[/bold]: "
+                + ", ".join(f"{r} ({n})" for r, n in reasons.most_common())
+            )
 
 
 @app.command()
-def sort(
-    recipes: RecipesDir = Path("recipes"),
-    outputs: OutputsDir = Path("outputs"),
-    sorted_dir: Annotated[Path, typer.Option(help="Where category folders are created.")] = Path(
-        "sorted"
-    ),
-) -> None:
-    """Copy sources into <sorted>/<category>/ with standardised names (originals untouched)."""
-    meta = _classified(recipes, outputs)
-    console.print(f"Copied {pipeline.sort_files(meta, recipes, sorted_dir)} files to {sorted_dir}/")
+def inventory(ctx: typer.Context) -> None:
+    """Stage 1: hash, classify and triage every source file."""
+    inv = _inventory(_ws(ctx))
+    counts = Counter((f.category.value, f.kind.value) for f in inv.canonical())
+    table = Table("Category", "Kind", "Unique files")
+    for (cat, kind), n in sorted(counts.items()):
+        table.add_row(cat, kind, str(n))
+    console.print(table)
+    console.print(f"{len(inv.files)} files, {len(inv.canonical())} unique")
 
 
 @app.command()
-def rename(
-    recipes: RecipesDir = Path("recipes"),
-    script: Annotated[Path, typer.Option(help="Write a reviewable shell script here.")] = Path(
-        "rename_plan.sh"
-    ),
+def extract(
+    ctx: typer.Context,
+    ocr: Annotated[bool, typer.Option(help="Also OCR scans and photos (paid API).")] = False,
+    limit: Annotated[int | None, typer.Option(help="Convert at most this many files.")] = None,
+    force: Annotated[bool, typer.Option(help="Redo local extractions that exist.")] = False,
 ) -> None:
-    """Suggest standardised filenames. Writes a script to review; nothing is renamed."""
-    plan = rename_plan(pipeline.scan(recipes))
-    lines = ["#!/bin/sh", "# Review before running. Generated by `recipify rename`."]
-    for path, new in plan:
-        lines.append(f"mv -n -- {shlex.quote(str(path))} {shlex.quote(str(path.with_name(new)))}")
-    script.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    console.print(f"{len(plan)} suggested renames written to {script}")
+    """Stage 2: extract text from every recipe document (local engines; OCR on request)."""
+    ws = _ws(ctx)
+    result = pipeline.run_extract(ws, _inventory(ws), ocr, limit, force, on_result=_report)
+    console.print(f"{result.done} extracted, {result.skipped} cached, {result.failed} failed")
 
 
 @app.command()
-def process(
-    recipes: RecipesDir = Path("recipes"),
-    outputs: OutputsDir = Path("outputs"),
-    category: Annotated[
-        list[Category] | None, typer.Option("--category", "-c", help="Limit to categories.")
-    ] = None,
-    limit: Annotated[int | None, typer.Option(help="Max files this run (useful for OCR).")] = None,
-    force: Annotated[bool, typer.Option(help="Reprocess files already converted.")] = False,
-    note: Annotated[str, typer.Option(help="Text for the run's CHANGELOG.md.")] = "",
-    reclassify: Annotated[bool, typer.Option(help="Re-classify unchanged files first.")] = False,
+def structure(
+    ctx: typer.Context,
+    engine: Annotated[
+        str, typer.Option(help=f"One of: {', '.join(STRUCTURERS)}. The LLM is paid.")
+    ] = "rules",
+    review_only: Annotated[
+        bool, typer.Option(help="Only documents that are in review now (for the LLM).")
+    ] = False,
+    limit: Annotated[int | None, typer.Option(help="Structure at most this many files.")] = None,
+    force: Annotated[bool, typer.Option(help="Redo local results that exist.")] = False,
 ) -> None:
-    """Convert files to markdown into outputs/<run-id>/<category>/<name>.md."""
-    meta = _classified(recipes, outputs, reclassify)
-
-    def report(key: str, status: str, error: str | None) -> None:
-        mark = "[green]ok[/green]" if status == "ok" else f"[red]failed[/red] {error}"
-        console.print(f"{mark}  {key}", highlight=False)
-
-    run_id = pipeline.process(
-        meta, recipes, outputs, category, limit, force, note=note, on_result=report
+    """Stage 3: split text into components, ingredients and steps."""
+    if engine not in STRUCTURERS:
+        raise typer.BadParameter(f"unknown engine {engine!r}")
+    ws = _ws(ctx)
+    only = None
+    if review_only:
+        only = {e.source for e in ws.load_catalog().by_tier(Tier.REVIEW)}
+    result = pipeline.run_structure(
+        ws, ws.load_inventory(), engine, limit, force, only, on_result=_report
     )
-    if (outputs / run_id).is_dir():
-        console.print(f"Run {run_id} complete: {outputs / run_id}/metadata.json and CHANGELOG.md")
-    else:
-        console.print("Nothing to convert; no new version created.")
+    console.print(f"{result.done} structured, {result.skipped} cached, {result.failed} failed")
+    if result.usage:
+        console.print(f"API usage: {result.usage}")
 
 
 @app.command()
 def register(
-    sources: Annotated[
-        list[str], typer.Argument(help="Source path(s) relative to the recipes dir.")
-    ],
-    markdown: Annotated[Path, typer.Option(help="Markdown file to store as a new version.")],
-    processor: Annotated[str, typer.Option(help="Name recorded in metadata.")] = "manual",
-    run_id: Annotated[str | None, typer.Option(help="Join an existing run/version.")] = None,
-    language: Annotated[str | None, typer.Option(help="is, en, mixed (auto if omitted).")] = None,
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="Source path, relative to the sources folder.")],
+    text: Annotated[Path, typer.Option(help="Text or markdown file with the transcription.")],
+    engine: Annotated[str, typer.Option(help="Who or what transcribed it.")] = "manual",
     accuracy: Annotated[
-        float | None, typer.Option(min=0, max=1, help="Your accuracy estimate (auto if omitted).")
+        float | None, typer.Option(min=0, max=1, help="Your estimate of its accuracy.")
     ] = None,
-    notes: Annotated[str, typer.Option(help="Notes stored with the quality value.")] = "",
-    note: Annotated[str, typer.Option(help="Text for the run's CHANGELOG.md.")] = "",
-    recipes: RecipesDir = Path("recipes"),
-    outputs: OutputsDir = Path("outputs"),
+    notes: Annotated[str, typer.Option(help="Notes kept with the transcription.")] = "",
 ) -> None:
-    """Record externally produced markdown (e.g. Copilot vision transcription) as a version.
+    """Store a transcription made outside the pipeline (scans read by hand or by a model)."""
+    ws = _ws(ctx)
+    inv = ws.load_inventory()
+    if source not in inv.files:
+        raise typer.BadParameter(f"{source} is not in the inventory (run `recipify inventory`)")
+    out = pipeline.register(ws, inv.files[source], text.read_text("utf-8"), engine, accuracy, notes)
+    console.print(f"Stored {out}")
 
-    Several sources may share one markdown file (byte-identical duplicates).
-    """
-    meta = _classified(recipes, outputs)
-    run_id = run_id or new_run_id()
-    quality = None
-    if accuracy is not None:
-        quality = Quality(accuracy, method="manual", notes=notes)
-    for source in sources:
-        if source not in meta.recipes:
-            raise typer.BadParameter(f"{source} is not a known source file")
-        out = pipeline.register_manual(
-            meta, outputs, source, markdown, processor, run_id, language, quality, note
-        )
-        console.print(f"Stored {out}  <- {source}", highlight=False)
+
+@app.command()
+def catalog(ctx: typer.Context) -> None:
+    """Stage 4: check every recipe against its source and decide what is ready."""
+    ws = _ws(ctx)
+    inv = ws.load_inventory()
+    result = pipeline.build_catalog(ws, inv, _curation(ws))
+    _print_summary(result, inv)
+    console.print(f"Wrote {ws.catalog_path} and {ws.report_path}")
+
+
+@app.command()
+def run(
+    ctx: typer.Context,
+    force: Annotated[bool, typer.Option(help="Redo local results that exist.")] = False,
+) -> None:
+    """Run every free stage: inventory, extract, structure (rules) and catalog."""
+    ws = _ws(ctx)
+    inv = _inventory(ws)
+    with console.status("Extracting text..."):
+        ex = pipeline.run_extract(ws, inv, force=force)
+    with console.status("Structuring recipes..."):
+        st = pipeline.run_structure(ws, inv, force=force)
+    console.print(
+        f"extract: {ex.done} new, {ex.skipped} cached, {ex.failed} failed · "
+        f"structure: {st.done} new, {st.skipped} cached, {st.failed} failed"
+    )
+    for path, error in ex.errors + st.errors:
+        console.print(f"[red]failed[/red] {path}: {error}", highlight=False)
+    _print_summary(pipeline.build_catalog(ws, inv, _curation(ws)), inv)
+    console.print(f"Report: {ws.report_path}")
+
+
+@app.command()
+def show(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="Source path or catalog id.")],
+) -> None:
+    """Print one document's assessment, extracted text and structured recipe."""
+    entries = _ws(ctx).load_catalog().entries
+    entry = next((e for e in entries if source in (e.source, e.id)), None)
+    if entry is None:
+        raise typer.BadParameter(f"{source} is not in the catalog")
+    a = entry.assessment
+    console.print(f"[bold]{entry.title}[/bold]  ({entry.source})", highlight=False)
+    console.print(f"tier: {a.tier.value}  {'; '.join(a.reasons)}", highlight=False)
+    console.print(f"engines: {entry.extraction} -> {entry.structure}", highlight=False)
+    if entry.recipe:
+        console.print_json(entry.recipe.model_dump_json(exclude_defaults=True))
 
 
 @app.command()
 def build(
-    outputs: OutputsDir = Path("outputs"),
-    viewer_dir: Annotated[Path, typer.Option(help="Prototype versions are written here.")] = Path(
-        "viewer"
-    ),
-    per_group: Annotated[int, typer.Option(help="Sample size per course.")] = 1000,
-    note: Annotated[str, typer.Option(help="Goes into the prototype's NOTES.md.")] = "",
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option(help="Where to write the viewer.")] = Path("dist/index.html"),
+    title: Annotated[str, typer.Option(help="Collection name shown in the page.")] = "recipify",
 ) -> None:
-    """Build the single-file HTML recipe viewer (a small sample, new viewer/vNNN each time)."""
-    path = viewer.build(outputs, viewer_dir, per_group, note)
-    console.print(f"Wrote {path} ({path.stat().st_size // 1024} KB)")
+    """Stage 5: write the single-file viewer with every ready recipe."""
+    catalog_ = _ws(ctx).load_catalog()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(viewer.render(catalog_, title), encoding="utf-8")
+    n = len(catalog_.by_tier(Tier.READY))
+    console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB, {n} recipes)")
 
 
 @app.command()
 def demo(
-    source: Annotated[
-        Path, typer.Option(help="Markdown recipes, one subfolder per course.")
-    ] = Path("examples/recipes"),
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Option(help="Sample documents.")] = Path("examples/sources"),
     out: Annotated[Path, typer.Option(help="Where to write the demo viewer.")] = Path(
         "site/demo/index.html"
     ),
+    report: Annotated[Path | None, typer.Option(help="Also copy the pipeline report here.")] = None,
 ) -> None:
-    """Build an unencrypted demo viewer from sample markdown recipes."""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(viewer.build_demo(source), encoding="utf-8")
-    console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB)")
+    """Run the whole free pipeline on the sample documents and build the demo viewer."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(source, Path(tmp))
+        inv = pipeline.run_inventory(ws, Curation())
+        pipeline.run_extract(ws, inv)
+        pipeline.run_structure(ws, inv)
+        result = pipeline.build_catalog(ws, inv, Curation())
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(viewer.render(result, "recipify demo"), encoding="utf-8")
+        if report:
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(ws.report_path.read_text("utf-8"), encoding="utf-8")
+    _print_summary(result, inv)
+    console.print(f"Wrote {out}")
 
 
 @app.command()
 def lock(
     source: Annotated[Path, typer.Argument(help="Viewer page to encrypt.")] = Path(
-        "share/recipify/index.html"
+        "dist/index.html"
     ),
     out: Annotated[Path, typer.Option(help="Locked page, ready to publish.")] = Path(
         "site/index.html"
@@ -215,53 +268,3 @@ def lock(
     console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB) from {source}")
     link = base_url + "#key=" + (quote(key, safe="") if show_link else "<ENCRYPTION_KEY>")
     console.print(f"Share link: {link}", highlight=False, soft_wrap=True)
-
-
-@app.command()
-def tidy(
-    outputs: OutputsDir = Path("outputs"),
-    note: Annotated[str, typer.Option(help="Text for the run's CHANGELOG.md.")] = "",
-) -> None:
-    """Remove echoed titles and repeated blocks as a new version (raw stays in the old one)."""
-    meta = Metadata.load_latest(outputs)
-    run_id = pipeline.tidy_run(meta, outputs, note=note)
-    if run_id is None:
-        console.print("Nothing to tidy; no new version created.")
-    else:
-        console.print(f"Run {run_id} complete: {outputs / run_id}/metadata.json and CHANGELOG.md")
-
-
-@app.command()
-def spelling(
-    outputs: OutputsDir = Path("outputs"),
-    fixes: Annotated[Path, typer.Option(help="Reviewed word fixes.")] = Path("spelling.json"),
-    note: Annotated[str, typer.Option(help="Text for the run's CHANGELOG.md.")] = "",
-) -> None:
-    """Fix known typos in the text as a new version (raw transcriptions stay in older ones)."""
-    meta = Metadata.load_latest(outputs)
-    run_id = pipeline.spelling_run(meta, outputs, load_spelling(fixes), note=note)
-    if run_id is None:
-        console.print("No known typos found; no new version created.")
-    else:
-        console.print(f"Run {run_id} complete: {outputs / run_id}/metadata.json and CHANGELOG.md")
-
-
-@app.command()
-def enrich(
-    outputs: OutputsDir = Path("outputs"),
-    curation: Annotated[Path, typer.Option(help="Manual title/label overrides.")] = Path(
-        "curation.json"
-    ),
-    note: Annotated[str, typer.Option(help="Text for the run's CHANGELOG.md.")] = "",
-) -> None:
-    """Add nicer titles and labels (course, dish, diet, cuisine, ingredients) as a new version."""
-    meta = Metadata.load_latest(outputs)
-    run_id = pipeline.enrich(meta, outputs, load_curation(curation), note=note)
-    if run_id is None:
-        console.print("Titles and labels are already up to date; no new version created.")
-    else:
-        console.print(f"Run {run_id} complete: {outputs / run_id}/metadata.json and CHANGELOG.md")
-
-
-if __name__ == "__main__":
-    app()

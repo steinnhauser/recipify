@@ -7,9 +7,11 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from recipify.extractors.docx import docx_to_markdown
-from recipify.extractors.pdf import pdf_to_markdown
+from recipify.extract.docx import extract_docx
+from recipify.extract.pdf import extract_pdf
 
+SPREADSHEET_ENGINE, SPREADSHEET_VERSION = "openpyxl", 1
+LEGACY_ENGINE, LEGACY_VERSION = "libreoffice", 2
 MAX_ROWS = 2000
 
 
@@ -46,36 +48,31 @@ def _cell(value: object) -> str:
         value = int(value)
     elif isinstance(value, float):
         value = round(value, 4)
-    return str(value).strip().replace("\n", " ").replace("|", "\\|")
+    return str(value).strip().replace("\n", " ").replace("|", "/")
 
 
-def _xlsx(path: Path) -> str:
+def _xlsx(path: Path, title: str) -> str:
     wb = load_workbook(path, read_only=True, data_only=True)
-    blocks = [f"# {path.stem}"]
+    blocks = [f"# {title}"]
     for ws in wb.worksheets:
         rows = [[_cell(c) for c in row] for row in ws.iter_rows(values_only=True, max_row=MAX_ROWS)]
-        rows = [r for r in rows if any(r)]
-        if not rows:
-            continue
-        width = max(i for r in rows for i, c in enumerate(r, 1) if c)
-        rows = [(r + [""] * width)[:width] for r in rows]
-        lines = ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
-        lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
-        blocks.append(f"## {ws.title}\n\n" + "\n".join(lines))
+        lines = [" | ".join(c for c in r if c) for r in rows]
+        lines = [line for line in lines if line]
+        if lines:
+            blocks.append(f"## {ws.title}\n\n" + "\n".join(lines))
     wb.close()
     return "\n\n".join(blocks) + "\n"
 
 
-def spreadsheet_to_markdown(path: Path) -> str:
+def extract_spreadsheet(path: Path) -> str:
     if path.suffix.lower() in {".xlsx", ".xlsm"}:
-        return _xlsx(path)
+        return _xlsx(path, path.stem)
     with tempfile.TemporaryDirectory() as tmp:
-        return _xlsx(_soffice(path, "xlsx", Path(tmp)))
+        return _xlsx(_soffice(path, "xlsx", Path(tmp)), path.stem)
 
 
-def legacy_office_to_markdown(path: Path) -> str:
+def extract_legacy(path: Path) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         if path.suffix.lower() in {".ppt", ".pptx", ".odp"}:
-            return pdf_to_markdown(_soffice(path, "pdf", Path(tmp)))
-        text = docx_to_markdown(_soffice(path, "docx", Path(tmp)))
-    return f"# {path.stem}\n\n{text}" if not text.startswith("#") else text
+            return extract_pdf(_soffice(path, "pdf", Path(tmp)))[0]
+        return extract_docx(_soffice(path, "docx", Path(tmp)))

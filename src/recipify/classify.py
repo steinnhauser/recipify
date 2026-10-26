@@ -1,24 +1,18 @@
-"""Classify source files into processing categories."""
+"""Decide each file's category from its content, not just its name."""
 
-import logging
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from docx import Document
-from pypdf import PdfReader
 
 from recipify.categories import Category
+from recipify.extract.pdf import page_count, pdf_text
 
-logging.getLogger("pypdf").setLevel(logging.ERROR)  # silence repair chatter
-
-MIN_PDF_TEXT_CHARS = 100  # below this over sampled pages, treat PDF as scanned
+MIN_PDF_TEXT_CHARS = 100  # below this over the sampled pages, the PDF is a scan
 PDF_SAMPLE_PAGES = 5
 
-IMAGE_MAGIC = {
-    b"\xff\xd8\xff": "jpeg",
-    b"\x89PNG\r\n\x1a\n": "png",
-}
+IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
 IGNORED_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 IGNORED_SUFFIXES = {".url", ".zip", ".lnk", ".tmp"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
@@ -30,6 +24,7 @@ LEGACY_SUFFIXES = {".doc", ".odt", ".pptx", ".ppt", ".rtf"}
 class Classification:
     category: Category
     reason: str
+    pages: int | None = None
 
 
 def _head(path: Path, n: int = 8) -> bytes:
@@ -42,33 +37,27 @@ def _sniff_zip(path: Path) -> Classification | None:
         return None
     with zipfile.ZipFile(path) as zf:
         names = set(zf.namelist())
-        if "word/document.xml" in names:
-            return _classify_docx(path)
-        if "META-INF/container.xml" in names or "mimetype" in names:
-            return Classification(Category.EPUB_BOOKS, "EPUB container (misnamed)")
+    if "word/document.xml" in names:
+        return _classify_docx(path)
+    if "META-INF/container.xml" in names or "mimetype" in names:
+        return Classification(Category.EPUB_BOOKS, "EPUB container (misnamed)")
     return None
 
 
 def _classify_pdf(path: Path) -> Classification:
     if not _head(path, 5).startswith(b"%PDF"):
-        sniffed = _sniff_zip(path)  # misnamed files: e.g. an EPUB or docx called .pdf
-        if sniffed:
-            return sniffed
-        return Classification(Category.EMPTY_OR_CORRUPTED, "missing %PDF header")
+        sniffed = _sniff_zip(path)  # misnamed files: an EPUB or docx called .pdf
+        return sniffed or Classification(Category.EMPTY_OR_CORRUPTED, "missing %PDF header")
     try:
-        reader = PdfReader(path)
-        if reader.is_encrypted and not reader.decrypt(""):
-            return Classification(Category.EMPTY_OR_CORRUPTED, "encrypted PDF")
-        if len(reader.pages) == 0:
-            return Classification(Category.EMPTY_OR_CORRUPTED, "PDF has no pages")
-        text = ""
-        for page in list(reader.pages)[:PDF_SAMPLE_PAGES]:
-            text += (page.extract_text() or "").strip()
-    except Exception as exc:  # pypdf raises many exception types on bad input
+        pages = page_count(path)
+        text = "".join(pdf_text(path, "raw", PDF_SAMPLE_PAGES).split())
+    except RuntimeError as exc:  # encrypted, truncated or otherwise unreadable
         return Classification(Category.EMPTY_OR_CORRUPTED, f"unreadable PDF: {exc}")
+    if pages == 0:
+        return Classification(Category.EMPTY_OR_CORRUPTED, "PDF has no pages")
     if len(text) >= MIN_PDF_TEXT_CHARS:
-        return Classification(Category.READABLE_PDFS, f"{len(text)} chars of embedded text")
-    return Classification(Category.IMAGE_BASED_PDFS, f"only {len(text)} chars of embedded text")
+        return Classification(Category.READABLE_PDFS, f"{len(text)} chars of text", pages)
+    return Classification(Category.IMAGE_BASED_PDFS, f"only {len(text)} chars of text", pages)
 
 
 def _classify_docx(path: Path) -> Classification:
@@ -76,7 +65,7 @@ def _classify_docx(path: Path) -> Classification:
         return Classification(Category.EMPTY_OR_CORRUPTED, "not a valid docx (zip) container")
     try:
         doc = Document(str(path))
-    except Exception as exc:
+    except Exception as exc:  # python-docx raises many types on damaged files
         return Classification(Category.EMPTY_OR_CORRUPTED, f"unreadable docx: {exc}")
     has_text = any(p.text.strip() for p in doc.paragraphs) or any(
         c.text.strip() for t in doc.tables for r in t.rows for c in r.cells
@@ -84,13 +73,6 @@ def _classify_docx(path: Path) -> Classification:
     if not has_text:
         return Classification(Category.EMPTY_OR_CORRUPTED, "docx contains no text")
     return Classification(Category.DOCX_FILES, "valid docx with text")
-
-
-def _classify_image(path: Path) -> Classification:
-    head = _head(path)
-    if any(head.startswith(magic) for magic in IMAGE_MAGIC):
-        return Classification(Category.IMAGE_FILES, "valid image header")
-    return Classification(Category.EMPTY_OR_CORRUPTED, "image header not recognised")
 
 
 def classify(path: Path) -> Classification:
@@ -106,7 +88,9 @@ def classify(path: Path) -> Classification:
     if suffix == ".docx":
         return _classify_docx(path)
     if suffix in IMAGE_SUFFIXES:
-        return _classify_image(path)
+        if _head(path).startswith(IMAGE_MAGIC):
+            return Classification(Category.IMAGE_FILES, "valid image header")
+        return Classification(Category.EMPTY_OR_CORRUPTED, "image header not recognised")
     if suffix in SPREADSHEET_SUFFIXES:
         return Classification(Category.SPREADSHEETS, f"{suffix} spreadsheet")
     if suffix in LEGACY_SUFFIXES:

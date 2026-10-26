@@ -1,6 +1,5 @@
-import itertools
 import json
-import subprocess
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,144 +7,110 @@ from typer.testing import CliRunner
 
 from recipify import cli
 from recipify.lock import decrypt_page
-from recipify.metadata import Metadata
 
 runner = CliRunner()
+EXAMPLES = Path(__file__).parent.parent / "examples" / "sources"
 
 
 def invoke(*args: str) -> str:
-    result = runner.invoke(cli.app, list(args), env={"COLUMNS": "200"})
+    result = runner.invoke(cli.app, list(args))
     assert result.exit_code == 0, result.output
     return result.output
 
 
 def fails(*args: str) -> str:
-    result = runner.invoke(cli.app, list(args), env={"COLUMNS": "200"})
+    result = runner.invoke(cli.app, list(args))
     assert result.exit_code != 0
     return result.output
 
 
-@pytest.fixture(autouse=True)
-def run_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Distinct run ids (real ones have one-second resolution, too coarse for tests)."""
-    counter = itertools.count(1)
-    new_run_id = lambda: f"run{next(counter):02d}"  # noqa: E731
-    monkeypatch.setattr(cli, "new_run_id", new_run_id)
-    monkeypatch.setattr(cli.pipeline, "new_run_id", new_run_id)
-
-
 @pytest.fixture
-def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_docx) -> Path:
-    """A project with two recipes and one corrupt file, using the CLI's default paths."""
+def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ws) -> Path:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "recipes" / "Aðalréttir").mkdir(parents=True)
-    make_docx(tmp_path / "recipes" / "Aðalréttir" / "Lamb Stew.docx", "Lamb stew\n\nlamb 500 g")
-    make_docx(tmp_path / "recipes" / "Kaka.docx", "Súkkulaðikaka\n\n200 g smjór og sykur")
-    (tmp_path / "recipes" / "broken.pdf").write_bytes(b"")
     return tmp_path
 
 
-def test_classify_and_list(workdir: Path):
-    out = invoke("classify")
-    assert "docx_files" in out and "empty_or_corrupted" in out
-    listed = invoke("classify", "--list", "docx_files", "--force")
-    assert "Aðalréttir/Lamb Stew.docx" in listed and "broken.pdf" not in listed
-    assert "is not a directory" in fails("classify", "--recipes", "missing")
+def test_stage_by_stage(workdir: Path):
+    assert "5 files, 4 unique" in invoke("inventory")
+    assert "2 extracted" in invoke("extract")
+    assert "2 structured" in invoke("structure")
+    out = invoke("catalog")
+    assert "readable_pdfs" in out and "book (1)" in out
+    out = invoke("show", "Bakarí/Tartdeig.pdf")
+    assert "tier: ready" in out and '"title": "Tartdeig"' in out
+    assert "tier: excluded" in invoke("show", "Handbook.pdf")
+    assert "not in the catalog" in fails("show", "nope.pdf")
+    assert "1 recipes" in invoke("build", "--out", "out/index.html")
+    assert (workdir / "out/index.html").is_file()
 
 
-def test_sort_and_rename(workdir: Path):
-    assert "Copied 3 files" in invoke("sort")
-    assert (workdir / "sorted" / "docx_files" / "lamb-stew.docx").is_file()
-    assert "Copied 0 files" in invoke("sort")  # existing copies are kept
-    assert (workdir / "recipes" / "Kaka.docx").is_file()  # originals untouched
-
-    assert "2 suggested renames" in invoke("rename")
-    assert (workdir / "recipes" / "Kaka.docx").is_file()  # nothing renamed yet
-    subprocess.run(["sh", "rename_plan.sh"], check=True)  # the plan runs as written
-    renamed = {
-        p.relative_to(workdir / "recipes").as_posix() for p in workdir.rglob("recipes/**/*.*")
-    }
-    assert renamed == {"broken.pdf", "kaka.docx", "Aðalréttir/lamb-stew.docx"}
+def test_run_review_only_and_errors(workdir: Path):
+    assert "Report:" in invoke("run")
+    out = invoke("structure", "--review-only", "--force")
+    assert "1 structured" in out  # only the docx is in review (too short)
+    assert "unknown engine" in fails("structure", "--engine", "nope")
+    assert "not a directory" in str(
+        runner.invoke(cli.app, ["--sources", "missing", "run"]).exception
+    )
 
 
-def test_full_pipeline(workdir: Path):
-    out = invoke("process", "--note", "first import")
-    assert "ok  Kaka.docx" in out and "complete" in out
-    assert "Nothing to convert" in invoke("process")
-    assert "Nothing to convert" in invoke("process", "-c", "readable_pdfs", "--reclassify")
+def test_run_reports_failures(workdir: Path, monkeypatch: pytest.MonkeyPatch):
+    from recipify.categories import Category
+    from recipify.extract import LOCAL, Engine
 
-    assert "complete" in invoke("enrich")
-    assert "already up to date" in invoke("enrich")
-    curation = workdir / "curation.json"
-    curation.write_text(json.dumps({"titles": {"Kaka": "Chocolate cake"}}), encoding="utf-8")
-    assert "complete" in invoke("enrich", "--curation", "curation.json")
+    def broken(path: Path):
+        raise ValueError("unreadable")
 
-    out = invoke("tidy")
-    assert "complete" in out or "Nothing to tidy" in out
-    assert "Nothing to tidy" in invoke("tidy")
-
-    assert "No known typos" in invoke("spelling")
-    (workdir / "spelling.json").write_text(json.dumps({"smjór": "smjör"}), encoding="utf-8")
-    assert "complete" in invoke("spelling")
-
-    assert "Wrote viewer/v001/recipes.html" in invoke("build", "--note", "first look")
-    assert "first look" in (workdir / "viewer" / "v001" / "NOTES.md").read_text()
-
-    meta = Metadata.load_latest(workdir / "outputs")
-    assert meta.recipes["Kaka.docx"]["recipe"]["title"] == "Chocolate cake"
+    monkeypatch.setitem(LOCAL, Category.DOCX_FILES, Engine("broken", 1, broken))
+    assert "failed Eftirréttir/Skyrkaka.docx: ValueError: unreadable" in invoke("run")
 
 
-def test_process_reports_failures(workdir: Path, monkeypatch: pytest.MonkeyPatch):
-    def broken(path: Path) -> str:
-        raise ValueError("cannot read")
+def test_structure_reports_usage(workdir: Path, monkeypatch: pytest.MonkeyPatch):
+    from recipify.models import Recipe
+    from recipify.structure import STRUCTURERS, Structurer
 
-    monkeypatch.setitem(cli.pipeline.EXTRACTORS, cli.Category.DOCX_FILES, ("broken", broken))
-    out = invoke("process")
-    assert "failed ValueError: cannot read  Kaka.docx" in out
+    invoke("run")
+    fake = Structurer("fake", 1, lambda t, n: (Recipe(title=n), {"prompt_tokens": 5}), costly=True)
+    monkeypatch.setitem(STRUCTURERS, "fake", fake)
+    assert "API usage: {'prompt_tokens': 10}" in invoke("structure", "--engine", "fake")
 
 
 def test_register(workdir: Path):
-    md = workdir / "kaka.md"
-    md.write_text("# Kaka\n\nTranscribed by hand.\n", encoding="utf-8")
-    out = invoke(
-        "register", "Kaka.docx", "--markdown", "kaka.md", "--processor", "vision",
-        "--accuracy", "0.95", "--notes", "checked", "--run-id", "r1", "--note", "manual",
-    )  # fmt: skip
-    assert "Stored r1/docx_files/kaka.md" in out
-    version = Metadata.load_latest(workdir / "outputs").recipes["Kaka.docx"]["versions"][-1]
-    assert version["quality"]["score"] == 0.95 and version["processor"] == "vision"
-
-    assert "Stored" in invoke("register", "Kaka.docx", "--markdown", "kaka.md")
-    assert "not a known source" in fails("register", "nope.docx", "--markdown", "kaka.md")
+    invoke("inventory")
+    (workdir / "t.md").write_text("Rauðrófur\n4 rauðrófur\n2 msk hunang\nAðferð:\nBakað.", "utf-8")
+    assert "vision@v1.json" in invoke(
+        "register", "photo.jpg", "--text", "t.md", "--engine", "vision"
+    )
+    assert "not in the inventory" in fails("register", "nope.jpg", "--text", "t.md")
+    invoke("run")
+    data = json.loads((workdir / "data/catalog.json").read_text())
+    photo = next(e for e in data["entries"] if e["source"] == "photo.jpg")
+    assert photo["assessment"]["tier"] == "review"
 
 
-def test_demo(tmp_path: Path):
-    recipes = tmp_path / "examples" / "dessert"
-    recipes.mkdir(parents=True)
-    (recipes / "skyr.md").write_text("# Skyr cake\n\nWhisk skyr with sugar.\n", encoding="utf-8")
-    (recipes / "plain.md").write_text("No heading here.\n", encoding="utf-8")
-    out = tmp_path / "site" / "demo" / "index.html"
-    assert "Wrote" in invoke("demo", "--source", str(tmp_path / "examples"), "--out", str(out))
-    page = out.read_text(encoding="utf-8")
-    assert "Skyr cake" in page and "Whisk skyr with sugar." in page and "plain" in page
+def test_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    shutil.copytree(EXAMPLES, tmp_path / "examples/sources")
+    out = invoke("demo", "--report", "site/report.md")
+    assert "Wrote site/demo/index.html" in out
+    assert "13 recipes ready" in (tmp_path / "site/report.md").read_text()
 
 
 def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "load_dotenv", lambda: None)  # never read the developer's .env
     monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-    (tmp_path / "viewer.html").write_text("<p>Kjötsúpa</p>", encoding="utf-8")
+    (tmp_path / "viewer.html").write_text("<p>Plokkfiskur</p>", encoding="utf-8")
     assert "ENCRYPTION_KEY is not set" in fails("lock", "viewer.html")
-
     monkeypatch.setenv("ENCRYPTION_KEY", "pass word/1")
     out = invoke("lock", "viewer.html", "--out", "site/index.html")
     assert "#key=<ENCRYPTION_KEY>" in out
-    assert decrypt_page((tmp_path / "site/index.html").read_text(), "pass word/1") == (
-        "<p>Kjötsúpa</p>"
+    locked = (tmp_path / "site/index.html").read_text(encoding="utf-8")
+    assert (
+        "Plokkfiskur" not in locked and decrypt_page(locked, "pass word/1") == "<p>Plokkfiskur</p>"
     )
     out = invoke("lock", "viewer.html", "--show-link", "--base-url", "https://example.org/")
     assert "https://example.org/#key=pass%20word%2F1" in out
     assert "opens with ENCRYPTION_KEY" in invoke("lock", "--verify")
-
     monkeypatch.setenv("ENCRYPTION_KEY", "other")
     assert "does not open" in fails("lock", "--verify")
