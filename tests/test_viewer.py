@@ -1,12 +1,9 @@
-from types import SimpleNamespace
-
 import pytest
 
 from recipify import viewer
 from recipify.categories import Category
 from recipify.lock import decrypt_page, encrypt_page
 from recipify.models import Assessment, Catalog, Entry, Ingredient, Kind, Recipe, Section, Tier
-from recipify.structure import llm
 
 
 def _entry(**kw) -> Entry:
@@ -92,49 +89,3 @@ def test_lock_roundtrip():
     assert decrypt_page(locked, "key") == "<p>secret</p>"
     with pytest.raises(ValueError):
         encrypt_page("x", "")
-
-
-def test_llm_structurer(monkeypatch: pytest.MonkeyPatch):
-    answer = llm._Recipe(
-        title="Ostakaka",
-        intro=[],
-        sections=[
-            llm._Section(
-                name="Krem",
-                ingredients_label="",
-                ingredients=["500 g ostur", "Salt"],
-                method_label="Aðferð:",
-                steps=["Hrært."],
-                notes=[],
-            )
-        ],
-    ).model_dump_json()
-    seen = {}
-
-    class FakeChat:
-        def complete(self, **kw):
-            seen.update(kw)
-            message = SimpleNamespace(content=answer)
-            usage = SimpleNamespace(prompt_tokens=120, completion_tokens=None)
-            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
-
-    import mistralai.client
-
-    import recipify.extract.ocr as ocr
-
-    monkeypatch.setattr(
-        mistralai.client, "Mistral", lambda api_key: SimpleNamespace(chat=FakeChat())
-    )
-    monkeypatch.setattr(ocr, "api_key", lambda: "k")
-    recipe, usage = llm.structure("Ostakaka\nKrem\n500 g ostur\nSalt\nAðferð:\nHrært.", "x")
-    assert usage == {"prompt_tokens": 120, "completion_tokens": 0}
-    assert recipe.title_in_text
-    assert recipe.sections[0].ingredients[0].amount == 500
-    assert recipe.sections[0].ingredients[1].amount is None
-    assert seen["temperature"] == 0 and seen["response_format"].type == "json_schema"
-    recipe, _ = llm.structure("Krem\n500 g ostur", "Ostakaka")
-    assert not recipe.title_in_text  # the model borrowed the file name
-
-    answer = None
-    with pytest.raises(ValueError, match="no JSON"):
-        llm.structure("x", "y")

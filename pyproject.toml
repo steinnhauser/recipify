@@ -1,16 +1,15 @@
 [project]
 dependencies = [
-  "pydantic>=2.7", # typed stage artifacts and the LLM's JSON schema
+  "pydantic>=2.7", # typed stage artifacts
   "python-docx>=1.1.0", # Word documents
   "lxml>=5.0", # Word XML (text boxes, content controls)
   "openpyxl>=3.1", # spreadsheets
-  "mistralai>=2.9.1", # OCR and the LLM structurer (both opt-in, paid)
   "python-dotenv>=1.0.0",
   "rich>=13.7.0",
   "typer>=0.12.0",
   "cryptography>=43", # AES-GCM for the locked (published) viewer
 ]
-description = "An AI-assisted document pipeline that turns a kitchen's archive of recipe files into verified, structured recipes and a single-file viewer"
+description = "A document pipeline that turns a kitchen's archive of recipe files into verified, structured recipes and a single-file viewer"
 name = "recipify"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,8 +20,7 @@ authors = [{ name = "Steinn Hauser Magnússon" }]
 keywords = [
   "data-pipeline",
   "document-processing",
-  "ocr",
-  "llm",
+  "transcription",
   "recipes",
   "pdf",
   "static-site",

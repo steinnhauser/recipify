@@ -2,8 +2,7 @@
 
 Work is cached by content hash and engine version: a stage skips every document that
 already has a current artifact, so re-running is cheap and an interrupted run resumes where
-it stopped. Costly artifacts (paid API calls, hand transcriptions) are never recomputed
-automatically, not even with ``force``.
+it stopped. Transcriptions of scans are costly to make and are never overwritten.
 """
 
 import time
@@ -16,7 +15,7 @@ from recipify import inventory
 from recipify.assess import assess
 from recipify.categories import Category
 from recipify.curation import Curation
-from recipify.extract import LOCAL, engine_for
+from recipify.extract import LOCAL
 from recipify.labels import detect_labels, refine_title
 from recipify.models import (
     Assessment,
@@ -33,7 +32,7 @@ from recipify.models import (
 )
 from recipify.report import render_report
 from recipify.store import Workspace, write_json
-from recipify.structure import STRUCTURERS
+from recipify.structure import rules
 from recipify.text import fold, tokens
 
 OnResult = Callable[[str, str], None]  # (source path, "ok" or the error)
@@ -47,15 +46,9 @@ class StageResult:
     skipped: int = 0
     failed: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
-    usage: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
-        return {
-            "done": self.done,
-            "skipped": self.skipped,
-            "failed": self.failed,
-            "usage": self.usage,
-        }
+        return {"done": self.done, "skipped": self.skipped, "failed": self.failed}
 
 
 def _log(ws: Workspace, stage: str, started: float, **details: object) -> None:
@@ -90,19 +83,17 @@ def run_inventory(
 def run_extract(
     ws: Workspace,
     inv: Inventory,
-    use_ocr: bool = False,
     limit: int | None = None,
     force: bool = False,
     on_result: OnResult | None = None,
 ) -> StageResult:
     started, result = time.time(), StageResult()
     for f in recipe_files(inv):
-        engine = engine_for(f.category, use_ocr)
-        if engine is None:
+        engine = LOCAL.get(f.category)
+        if engine is None:  # scans and photos: see `register`
             continue
         target = ws.extraction_path(f.sha256, engine.name, engine.version)
-        have_text = ws.has_extraction(f.sha256)
-        if (target.exists() and (engine.costly or not force)) or (engine.costly and have_text):
+        if target.exists() and not force:
             result.skipped += 1
             continue
         if limit is not None and result.done + result.failed >= limit:
@@ -117,7 +108,6 @@ def run_extract(
                 version=engine.version,
                 text=text,
                 checks=checks,
-                costly=engine.costly,
             )
             write_json(target, extraction)
             result.done += 1
@@ -128,7 +118,7 @@ def run_extract(
             result.errors.append((f.path, status))
         if on_result:
             on_result(f.path, status)
-    _log(ws, "extract", started, ocr=use_ocr, **result.as_dict())
+    _log(ws, "extract", started, **result.as_dict())
     return result
 
 
@@ -150,12 +140,19 @@ def register(
     accuracy: float | None = None,
     notes: str = "",
 ) -> Path:
-    """Store a transcription made outside the pipeline (by hand or by a vision model)."""
-    target = ws.extraction_path(f.sha256, engine, 1)
+    """Store a transcription made outside the pipeline (by hand or by a vision model).
+
+    Transcriptions are costly, so an existing one is never overwritten: a second
+    transcription by the same engine is stored as the next version.
+    """
+    version = 1
+    while ws.extraction_path(f.sha256, engine, version).exists():
+        version += 1
+    target = ws.extraction_path(f.sha256, engine, version)
     extraction = Extraction(
         sha256=f.sha256,
         engine=engine,
-        version=1,
+        version=version,
         text=text,
         costly=True,
         accuracy=accuracy,
@@ -175,43 +172,32 @@ def _label(e: Extraction) -> str:
 def run_structure(
     ws: Workspace,
     inv: Inventory,
-    engine: str = "rules",
     limit: int | None = None,
     force: bool = False,
-    only: set[str] | None = None,
     on_result: OnResult | None = None,
 ) -> StageResult:
-    structurer = STRUCTURERS[engine]
     started, result = time.time(), StageResult()
     for f in recipe_files(inv):
-        if only is not None and f.path not in only:
-            continue
         extraction = best_extraction(ws, f)
         if extraction is None:
             continue
-        target = ws.structured_path(f.sha256, structurer.name, structurer.version)
-        if target.exists():
+        target = ws.structured_path(f.sha256, rules.ENGINE, rules.VERSION)
+        if target.exists() and not force:
             previous = Structured.model_validate_json(target.read_text(encoding="utf-8"))
-            current = previous.extraction == _label(extraction)
-            if structurer.costly or (current and not force):
+            if previous.extraction == _label(extraction):
                 result.skipped += 1
                 continue
         if limit is not None and result.done + result.failed >= limit:
             break
         try:
-            recipe, usage = structurer.run(extraction.text, Path(f.path).stem)
             structured = Structured(
                 sha256=f.sha256,
-                engine=structurer.name,
-                version=structurer.version,
+                engine=rules.ENGINE,
+                version=rules.VERSION,
                 extraction=_label(extraction),
-                costly=structurer.costly,
-                usage=usage,
-                recipe=recipe,
+                recipe=rules.structure(extraction.text, Path(f.path).stem),
             )
             write_json(target, structured)
-            for k, v in usage.items():
-                result.usage[k] = result.usage.get(k, 0) + v
             result.done += 1
             status = "ok"
         except Exception as exc:  # one bad file must not stop a long run
@@ -220,7 +206,7 @@ def run_structure(
             result.errors.append((f.path, status))
         if on_result:
             on_result(f.path, status)
-    _log(ws, "structure", started, engine=structurer.label, **result.as_dict())
+    _log(ws, "structure", started, engine=f"{rules.ENGINE}@v{rules.VERSION}", **result.as_dict())
     return result
 
 
@@ -230,11 +216,8 @@ def run_structure(
 def _choose(
     ws: Workspace, f: SourceFile, extraction: Extraction | None
 ) -> tuple[Structured | None, Assessment]:
-    """Assess every structuring of the current text and keep the most trustworthy one.
-
-    On a tie the deterministic rules win, so an LLM result is only used where it passes
-    checks that the rules failed.
-    """
+    """Assess every structuring of the current text (one per structurer version) and keep
+    the most trustworthy one."""
     if extraction is None:
         return None, assess(f, None, None)
     candidates = [
@@ -244,7 +227,7 @@ def _choose(
     ]
     if not candidates:
         return None, assess(f, extraction, None)
-    return min(candidates, key=lambda c: (TIER_RANK[c[1].tier], c[0].costly, len(c[1].reasons)))
+    return min(candidates, key=lambda c: (TIER_RANK[c[1].tier], len(c[1].reasons), -c[0].version))
 
 
 def _words(entry: Entry) -> Counter[str]:
@@ -343,8 +326,16 @@ def build_catalog(ws: Workspace, inv: Inventory, curation: Curation) -> Catalog:
     _distinct_titles(entries, curation)
     entries.sort(key=lambda e: (TIER_RANK[e.assessment.tier], e.title.casefold()))
     catalog = Catalog(entries=entries)
+    tiers = {e.source: e.assessment.tier.value for e in entries}
+    previous = ws.latest_snapshot()
+    changes = sorted(
+        (source, previous.get(source, "new"), tier)
+        for source, tier in tiers.items()
+        if previous and previous.get(source) != tier
+    )
     write_json(ws.catalog_path, catalog)
-    ws.report_path.write_text(render_report(catalog, inv), encoding="utf-8")
+    ws.report_path.write_text(render_report(catalog, inv, changes), encoding="utf-8")
+    ws.save_snapshot(catalog.created_at, tiers)
     counts = {t.value: len(catalog.by_tier(t)) for t in Tier}
-    _log(ws, "catalog", started, **counts)
+    _log(ws, "catalog", started, changes=len(changes), **counts)
     return catalog

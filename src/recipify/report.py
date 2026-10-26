@@ -36,7 +36,9 @@ def tier_table(catalog: Catalog, inv: Inventory) -> list[tuple[str, int, int, in
     return rows
 
 
-def render_report(catalog: Catalog, inv: Inventory) -> str:
+def render_report(
+    catalog: Catalog, inv: Inventory, changes: list[tuple[str, str, str]] | None = None
+) -> str:
     ready = catalog.by_tier(Tier.READY)
     out = [
         "# Pipeline report",
@@ -49,6 +51,10 @@ def render_report(catalog: Catalog, inv: Inventory) -> str:
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     out += [f"| {r[0]} | " + " | ".join(map(str, r[1:])) + " |" for r in tier_table(catalog, inv)]
+
+    if changes:
+        out += ["", f"## Changes since the last run: {len(changes)}", ""]
+        out += [f"- `{source}`: {old} -> {new}" for source, old, new in changes]
 
     for tier in (Tier.REVIEW, Tier.EXCLUDED):
         entries = catalog.by_tier(tier)

@@ -1,7 +1,6 @@
 import shutil
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from docx import Document
@@ -10,9 +9,9 @@ from openpyxl import Workbook
 
 from recipify.categories import Category
 from recipify.classify import classify
-from recipify.extract import LOCAL, OCR, engine_for, ocr, office
+from recipify.extract import LOCAL, office
 from recipify.extract.docx import extract_docx
-from recipify.extract.pdf import _poppler, extract_pdf, order_agreement, page_count
+from recipify.extract.pdf import _poppler, extract_pdf, order_agreement, page_count, render_pages
 
 
 def test_classify(tmp_path: Path, make_pdf, make_docx):
@@ -186,35 +185,11 @@ def test_soffice_wrapper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert calls[0][0] == "/usr/bin/soffice"
 
 
-def test_ocr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    seen = {}
-
-    class FakeOcr:
-        def process(self, document: dict, model: str, include_image_base64: bool):
-            seen["type"] = document["type"]
-            return SimpleNamespace(
-                pages=[SimpleNamespace(markdown="Page 1"), SimpleNamespace(markdown="Page 2")]
-            )
-
-    monkeypatch.setattr(ocr, "Mistral", lambda api_key: SimpleNamespace(ocr=FakeOcr()))
-    monkeypatch.setattr(ocr, "load_dotenv", lambda: None)
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
-    (tmp_path / "scan.png").write_bytes(b"\x89PNG")
-    with pytest.raises(RuntimeError, match="MISTRAL_API_KEY"):
-        ocr.extract_ocr(tmp_path / "scan.png")
-    monkeypatch.setenv("API_KEY", "k")
-    assert ocr.extract_ocr(tmp_path / "scan.png") == "Page 1\n\nPage 2\n"
-    assert seen["type"] == "image_url"
-    (tmp_path / "scan.pdf").write_bytes(b"%PDF")
-    ocr.extract_ocr(tmp_path / "scan.pdf")
-    assert seen["type"] == "document_url"
-
-
-def test_engines(tmp_path: Path, make_docx):
-    assert engine_for(Category.READABLE_PDFS).label == "poppler@v2"
-    assert engine_for(Category.IMAGE_FILES) is None
-    assert engine_for(Category.IMAGE_FILES, use_ocr=True) is OCR
-    assert engine_for(Category.EPUB_BOOKS, use_ocr=True) is None
+def test_engines_and_page_images(tmp_path: Path, make_docx, make_pdf):
+    assert LOCAL[Category.READABLE_PDFS].label == "poppler@v2"
+    assert Category.IMAGE_FILES not in LOCAL  # scans and photos are transcribed, not extracted
     docx = make_docx(tmp_path / "a.docx", "Pönnukökur")
     assert LOCAL[Category.DOCX_FILES].run(docx) == ("Pönnukökur\n", {})
+    scan = make_pdf(tmp_path / "scan.pdf", ["x", "y"])
+    pages = render_pages(scan, tmp_path / "pages", dpi=30)
+    assert [p.name for p in pages] == ["scan-1.jpg", "scan-2.jpg"]

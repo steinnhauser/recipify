@@ -32,7 +32,7 @@ def test_examples_end_to_end(tmp_path: Path):
         "Restaurant/Desserts/Chocolate mousse.pdf": (
             "same recipe as Restaurant/Desserts/Chocolate mousse.docx"
         ),
-        "Scans/Beetroot salad.png": "needs OCR, not run yet",
+        "Scans/Beetroot salad.png": "needs a transcription (no text layer)",
     }
     plokkfiskur = next(e for e in ready if e.source == "Restaurant/Mains/Plokkfiskur.pdf")
     assert plokkfiskur.duplicates == ["Old/Plokkfiskur (1).pdf"]

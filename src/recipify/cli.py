@@ -1,6 +1,7 @@
 """Command-line interface: one command per pipeline stage, plus `run` for all of them."""
 
 import os
+import shlex
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -15,10 +16,10 @@ from rich.table import Table
 from recipify import lock as locking
 from recipify import pipeline, viewer
 from recipify.curation import Curation
+from recipify.extract.pdf import render_pages
 from recipify.models import Catalog, Inventory, Tier
 from recipify.report import reason_group, tier_table
 from recipify.store import Workspace
-from recipify.structure import STRUCTURERS
 
 app = typer.Typer(
     help="Turn a folder of recipe documents into verified, structured recipes and a viewer.",
@@ -90,41 +91,48 @@ def inventory(ctx: typer.Context) -> None:
 @app.command()
 def extract(
     ctx: typer.Context,
-    ocr: Annotated[bool, typer.Option(help="Also OCR scans and photos (paid API).")] = False,
     limit: Annotated[int | None, typer.Option(help="Convert at most this many files.")] = None,
-    force: Annotated[bool, typer.Option(help="Redo local extractions that exist.")] = False,
+    force: Annotated[bool, typer.Option(help="Redo extractions that exist.")] = False,
 ) -> None:
-    """Stage 2: extract text from every recipe document (local engines; OCR on request)."""
+    """Stage 2: extract the text layer of every recipe document (local, free)."""
     ws = _ws(ctx)
-    result = pipeline.run_extract(ws, _inventory(ws), ocr, limit, force, on_result=_report)
+    result = pipeline.run_extract(ws, _inventory(ws), limit, force, on_result=_report)
     console.print(f"{result.done} extracted, {result.skipped} cached, {result.failed} failed")
 
 
 @app.command()
 def structure(
     ctx: typer.Context,
-    engine: Annotated[
-        str, typer.Option(help=f"One of: {', '.join(STRUCTURERS)}. The LLM is paid.")
-    ] = "rules",
-    review_only: Annotated[
-        bool, typer.Option(help="Only documents that are in review now (for the LLM).")
-    ] = False,
     limit: Annotated[int | None, typer.Option(help="Structure at most this many files.")] = None,
-    force: Annotated[bool, typer.Option(help="Redo local results that exist.")] = False,
+    force: Annotated[bool, typer.Option(help="Redo results that exist.")] = False,
 ) -> None:
     """Stage 3: split text into components, ingredients and steps."""
-    if engine not in STRUCTURERS:
-        raise typer.BadParameter(f"unknown engine {engine!r}")
     ws = _ws(ctx)
-    only = None
-    if review_only:
-        only = {e.source for e in ws.load_catalog().by_tier(Tier.REVIEW)}
-    result = pipeline.run_structure(
-        ws, ws.load_inventory(), engine, limit, force, only, on_result=_report
-    )
+    result = pipeline.run_structure(ws, ws.load_inventory(), limit, force, on_result=_report)
     console.print(f"{result.done} structured, {result.skipped} cached, {result.failed} failed")
-    if result.usage:
-        console.print(f"API usage: {result.usage}")
+
+
+@app.command()
+def pages(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="Source path, relative to the sources folder.")],
+    out: Annotated[Path, typer.Option(help="Folder for the page images.")] = Path("dist/pages"),
+    dpi: Annotated[int, typer.Option(help="Resolution of the rendered pages.")] = 150,
+) -> None:
+    """Write the page images of a scan or photo, ready to transcribe (then `register` it)."""
+    ws = _ws(ctx)
+    path = ws.sources / source
+    if not path.is_file():
+        raise typer.BadParameter(f"{path} not found")
+    if path.suffix.lower() == ".pdf":
+        written = render_pages(path, out, dpi)
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+        written = [out / path.name]
+        written[0].write_bytes(path.read_bytes())
+    for page in written:
+        console.print(str(page), highlight=False)
+    console.print(f"Transcribe them, then: recipify register {shlex.quote(source)} --text <file>")
 
 
 @app.command()
@@ -132,7 +140,9 @@ def register(
     ctx: typer.Context,
     source: Annotated[str, typer.Argument(help="Source path, relative to the sources folder.")],
     text: Annotated[Path, typer.Option(help="Text or markdown file with the transcription.")],
-    engine: Annotated[str, typer.Option(help="Who or what transcribed it.")] = "manual",
+    engine: Annotated[
+        str, typer.Option(help="Who or what transcribed it, e.g. manual or vision.")
+    ] = "manual",
     accuracy: Annotated[
         float | None, typer.Option(min=0, max=1, help="Your estimate of its accuracy.")
     ] = None,

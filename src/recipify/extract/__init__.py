@@ -1,15 +1,17 @@
 """Stage 2: turn each source document into plain text.
 
-One engine per category. Local engines read the text layer and are free and exact; the OCR
-engine reads pixels, costs API credits and only runs when asked for.
+One local engine per category with a text layer: free, exact and repeatable. Scans and
+photos have no text layer; their transcriptions are made outside the pipeline (by hand or
+by a vision model, from the page images `recipify pages` writes) and stored with
+`recipify register`.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from recipify.categories import NEEDS_OCR, Category
-from recipify.extract import docx, ocr, office, pdf
+from recipify.categories import Category
+from recipify.extract import docx, office, pdf
 
 Result = tuple[str, dict[str, float]]
 
@@ -19,7 +21,6 @@ class Engine:
     name: str
     version: int
     run: Callable[[Path], Result]
-    costly: bool = False  # paid API: runs only when asked for, never twice
 
     @property
     def label(self) -> str:
@@ -42,12 +43,3 @@ LOCAL = {
         _no_checks(office.extract_spreadsheet),
     ),
 }
-OCR = Engine(ocr.ENGINE, ocr.VERSION, _no_checks(ocr.extract_ocr), costly=True)
-
-
-def engine_for(category: Category, use_ocr: bool = False) -> Engine | None:
-    if category in LOCAL:
-        return LOCAL[category]
-    if use_ocr and category in NEEDS_OCR:
-        return OCR
-    return None

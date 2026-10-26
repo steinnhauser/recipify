@@ -16,6 +16,7 @@ class Kind(StrEnum):
     RECIPE = "recipe"  # one recipe (possibly several components) per document
     BOOK = "book"  # cookbooks, binders and long collections: kept for later
     REFERENCE = "reference"  # mise en place lists, menus, staff lists, plans
+    PHOTO = "photo"  # a picture of a plated dish, not of a recipe
 
 
 class Tier(StrEnum):
@@ -58,7 +59,7 @@ class Extraction(BaseModel):
     version: int
     created_at: str = Field(default_factory=now_iso)
     text: str
-    costly: bool = False  # paid API or done by hand: never recomputed automatically
+    costly: bool = False  # transcribed by hand or by a vision model: never overwritten
     checks: dict[str, float] = {}  # e.g. reading-order agreement between two extractors
     accuracy: float | None = None  # stated accuracy of a manual or vision transcription
     notes: str = ""
@@ -116,8 +117,6 @@ class Structured(BaseModel):
     version: int
     extraction: str  # "<engine>@v<version>" of the input text
     created_at: str = Field(default_factory=now_iso)
-    costly: bool = False
-    usage: dict[str, int] = {}  # API token counts, when an LLM was used
     recipe: Recipe
 
 
