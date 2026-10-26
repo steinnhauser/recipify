@@ -2,8 +2,11 @@
 # Recipe data: never commit (the repository is public).
 # Only the encrypted page in site/ is published; see README "Publishing".
 # ---------------------------------------------------------------------------
-# Sources, sorted copies, extracted markdown, viewer builds
+# Sources, pipeline artifacts and viewer builds
 /recipes/
+/data/
+/dist/
+# Output of earlier pipeline versions
 /sorted/
 /outputs/
 /viewer/
@@ -49,8 +52,9 @@ rename_plan.sh
 *.html
 !/src/recipify/*_template.html
 !/site/*.html
-# README screenshots (rendered from the sample recipes in examples/)
+# README screenshots and the sample documents (fictional recipes written for this project)
 !/docs/*.png
+!/examples/sources/**
 # Internal working notes (mention source folders and files)
 PROGRESS.md
 .github/agents/
