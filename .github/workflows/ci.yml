@@ -1,7 +1,7 @@
 # Lints, type-checks and tests every push and pull request. On main, a passing run then
 # publishes site/ to GitHub Pages:
 #   /           the private collection, encrypted locally with `uv run recipify lock` (committed)
-#   /demo/      a public demo built here from examples/recipes with `uv run recipify demo`
+#   /demo/      the whole pipeline run here on the sample documents in examples/sources
 #   /coverage/  the pytest coverage report, plus badge.json for the README badge
 # Recipes from the private collection never reach the repository in plain text.
 name: CI
@@ -23,14 +23,16 @@ jobs:
         python: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+      - name: Install poppler (PDF text extraction)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - name: Lint
         run: |
-          uv run ruff check src tests
-          uv run ruff format --check src tests
+          uv run ruff check src tests examples
+          uv run ruff format --check src tests examples
       - name: Type check
         run: uv run mypy src
       - name: Test
@@ -91,8 +93,11 @@ jobs:
             uv run recipify lock --verify
           fi
 
-      - name: Build the public demo
-        run: uv run recipify demo --out site/demo/index.html
+      - name: Run the pipeline on the sample documents (public demo)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+          uv run recipify demo --out site/demo/index.html --report site/demo/report.md
+          cat site/demo/report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Add the coverage report
         uses: actions/download-artifact@v4
