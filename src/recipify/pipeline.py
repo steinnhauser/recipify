@@ -1,371 +1,350 @@
-"""Scan, classify, sort and process recipe files."""
+"""Run the stages. Each reads the previous stage's artifacts and writes its own.
 
-import hashlib
-import shutil
-from collections.abc import Callable, Collection, Iterable
+Work is cached by content hash and engine version: a stage skips every document that
+already has a current artifact, so re-running is cheap and an interrupted run resumes where
+it stopped. Costly artifacts (paid API calls, hand transcriptions) are never recomputed
+automatically, not even with ``force``.
+"""
+
+import time
+from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from recipify.categories import NEEDS_OCR, PROCESSABLE, Category
-from recipify.classify import classify
-from recipify.extractors import EXTRACTORS
-from recipify.labels import describe
-from recipify.metadata import Metadata, new_run_id, now_iso
-from recipify.naming import slugify, standard_name
-from recipify.quality import Quality, detect_language, score_text
-from recipify.spelling import fix_spelling
-from recipify.tidy import tidy
+from recipify import inventory
+from recipify.assess import assess
+from recipify.categories import Category
+from recipify.curation import Curation
+from recipify.extract import LOCAL, engine_for
+from recipify.labels import detect_labels, refine_title
+from recipify.models import (
+    Assessment,
+    Catalog,
+    Entry,
+    Extraction,
+    Inventory,
+    Kind,
+    Recipe,
+    SourceFile,
+    Structured,
+    Tier,
+    now_iso,
+)
+from recipify.report import render_report
+from recipify.store import Workspace, write_json
+from recipify.structure import STRUCTURERS
+from recipify.text import fold, tokens
 
-ORIGINAL_FORM = {
-    Category.READABLE_PDFS: "pdf (text layer)",
-    Category.IMAGE_BASED_PDFS: "pdf (scanned images)",
-    Category.DOCX_FILES: "word document",
-    Category.IMAGE_FILES: "photo/image",
-    Category.SPREADSHEETS: "spreadsheet",
-    Category.LEGACY_OFFICE: "legacy office document",
-    Category.EPUB_BOOKS: "e-book (epub)",
-}
-
-
-def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def scan(recipes_dir: Path) -> list[Path]:
-    return sorted(p for p in recipes_dir.rglob("*") if p.is_file())
+OnResult = Callable[[str, str], None]  # (source path, "ok" or the error)
+TIER_RANK = {Tier.READY: 0, Tier.REVIEW: 1, Tier.EXCLUDED: 2}
+TWIN_SIMILARITY = 0.9
 
 
-def _unique_slug(meta: Metadata, key: str, path: Path, digest: str) -> str:
-    slug = Path(standard_name(path)).stem if path.suffix else slugify(path.name)
-    used = {e.get("slug") for k, e in meta.recipes.items() if k != key}
-    return f"{slug}-{digest[:8]}" if slug in used else slug
+@dataclass
+class StageResult:
+    done: int = 0
+    skipped: int = 0
+    failed: int = 0
+    errors: list[tuple[str, str]] = field(default_factory=list)
+    usage: dict[str, int] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "done": self.done,
+            "skipped": self.skipped,
+            "failed": self.failed,
+            "usage": self.usage,
+        }
 
 
-def classify_all(
-    meta: Metadata,
-    recipes_dir: Path,
-    on_progress: Callable[[Path], None] | None = None,
-    force: bool = False,
-) -> None:
-    """Classify every file and record it in metadata (unchanged files are not re-read)."""
-    for path in scan(recipes_dir):
-        key = path.relative_to(recipes_dir).as_posix()
-        if on_progress:
-            on_progress(path)
-        entry = meta.entry(key)
-        size = path.stat().st_size
-        if not force and "original_format" in entry and entry.get("size") == size:
-            continue
-        digest = sha256(path)
-        result = classify(path)
-        entry.update(
-            source=key,
-            size=size,
-            sha256=digest,
-            category=result.category.value,
-            classification_reason=result.reason,
-            original_format=path.suffix.lower().lstrip(".") or "none",
-            original_form=ORIGINAL_FORM.get(result.category, result.category.value),
-            suggested_name=standard_name(path),
-            slug=_unique_slug(meta, key, path, digest),
-        )
+def _log(ws: Workspace, stage: str, started: float, **details: object) -> None:
+    ws.log_run(
+        {"stage": stage, "at": now_iso(), "seconds": round(time.time() - started, 1), **details}
+    )
 
 
-def sort_files(meta: Metadata, recipes_dir: Path, sorted_dir: Path) -> int:
-    """Copy (never move) sources into sorted_dir/<category>/. Returns files copied."""
-    copied = 0
-    for key, entry in meta.recipes.items():
-        src = recipes_dir / key
-        if not src.exists():
-            continue
-        dest = sorted_dir / entry["category"] / f"{entry['slug']}{src.suffix.lower()}"
-        if dest.exists():
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        copied += 1
-    return copied
+def recipe_files(inv: Inventory) -> list[SourceFile]:
+    """The documents worth converting: unique files that are recipes."""
+    return [f for f in inv.canonical() if f.kind == Kind.RECIPE]
 
 
-def carry_forward(
-    meta: Metadata, outputs_dir: Path, run_id: str, skip: Collection[str] = ()
-) -> int:
-    """Copy every current output into the new version so each version is a complete tree.
-
-    The copy is recorded as a version with ``carried_from`` and is not reported as a change.
-    """
-    carried = 0
-    for key, entry in meta.recipes.items():
-        if key in skip or any(v["run_id"] == run_id for v in entry["versions"]):
-            continue
-        latest = next(
-            (
-                v
-                for v in reversed(entry["versions"])
-                if v["status"] == "ok" and (outputs_dir / v["output"]).is_file()
-            ),
-            None,
-        )
-        if latest is None:
-            continue
-        out = Path(run_id) / Path(latest["output"]).relative_to(Path(latest["output"]).parts[0])
-        (outputs_dir / out).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(outputs_dir / latest["output"], outputs_dir / out)
-        entry["versions"].append(
-            {
-                **latest,
-                "version": len(entry["versions"]) + 1,
-                "run_id": run_id,
-                "output": out.as_posix(),
-                "carried_from": latest.get("carried_from") or latest["run_id"],
-                "created_at": now_iso(),
-            }
-        )
-        carried += 1
-    return carried
+# --- stage 1 ----------------------------------------------------------------------------
 
 
-def _already_done(entry: dict) -> bool:
-    return any(v["status"] == "ok" and v["sha256"] == entry["sha256"] for v in entry["versions"])
+def run_inventory(
+    ws: Workspace, curation: Curation, on_file: Callable[[str], None] | None = None
+) -> Inventory:
+    if not ws.sources.is_dir():
+        raise FileNotFoundError(f"{ws.sources} is not a directory")
+    started = time.time()
+    inv = inventory.scan(ws.sources, ws.load_inventory(), curation, on_file)
+    write_json(ws.inventory_path, inv)
+    _log(ws, "inventory", started, files=len(inv.files), unique=len(inv.canonical()))
+    return inv
 
 
-def process(
-    meta: Metadata,
-    recipes_dir: Path,
-    outputs_dir: Path,
-    categories: Iterable[Category] | None = None,
+# --- stage 2 ----------------------------------------------------------------------------
+
+
+def run_extract(
+    ws: Workspace,
+    inv: Inventory,
+    use_ocr: bool = False,
     limit: int | None = None,
     force: bool = False,
-    run_id: str | None = None,
-    note: str = "",
-    on_result: Callable[[str, str, str | None], None] | None = None,
-) -> str:
-    """Convert files to markdown into outputs_dir/<run_id>/<category>/<slug>.md."""
-    run_id = run_id or new_run_id()
-    meta.start_run(run_id, note)
-    wanted = set(categories) if categories else PROCESSABLE - NEEDS_OCR  # OCR only on request
-    done = 0
-    todo = []
-    for key, entry in sorted(meta.recipes.items()):
-        category = Category(entry["category"])
-        if category in wanted and category in EXTRACTORS and (force or not _already_done(entry)):
-            todo.append(key)
-    if not todo:
-        meta.data["runs"].pop(run_id, None)
-        return run_id
-    carry_forward(meta, outputs_dir, run_id, skip=todo)
-    for key in todo:
-        entry = meta.recipes[key]
-        category = Category(entry["category"])
-        if limit is not None and done >= limit:
+    on_result: OnResult | None = None,
+) -> StageResult:
+    started, result = time.time(), StageResult()
+    for f in recipe_files(inv):
+        engine = engine_for(f.category, use_ocr)
+        if engine is None:
+            continue
+        target = ws.extraction_path(f.sha256, engine.name, engine.version)
+        have_text = ws.has_extraction(f.sha256)
+        if (target.exists() and (engine.costly or not force)) or (engine.costly and have_text):
+            result.skipped += 1
+            continue
+        if limit is not None and result.done + result.failed >= limit:
             break
-        done += 1
-        processor, extract = EXTRACTORS[category]
-        version = {
-            "version": len(entry["versions"]) + 1,
-            "run_id": run_id,
-            "processor": processor,
-            "sha256": entry["sha256"],
-            "created_at": now_iso(),
-        }
         try:
-            markdown = extract(recipes_dir / key)
-            if not markdown.strip():
-                raise ValueError("extractor returned no content")
-            out = Path(run_id) / category.value / f"{entry['slug']}.md"
-            (outputs_dir / out).parent.mkdir(parents=True, exist_ok=True)
-            (outputs_dir / out).write_text(markdown, encoding="utf-8")
-            language = detect_language(markdown)
-            entry["language"] = language
-            version.update(
-                status="ok",
-                output=out.as_posix(),
-                error=None,
-                language=language,
-                quality=score_text(markdown, language).to_dict(),
+            text, checks = engine.run(ws.sources / f.path)
+            if not text.strip():
+                raise ValueError("no text found")
+            extraction = Extraction(
+                sha256=f.sha256,
+                engine=engine.name,
+                version=engine.version,
+                text=text,
+                checks=checks,
+                costly=engine.costly,
             )
-        except Exception as exc:
-            version.update(status="failed", output=None, error=f"{type(exc).__name__}: {exc}")
-        entry["versions"].append(version)
+            write_json(target, extraction)
+            result.done += 1
+            status = "ok"
+        except Exception as exc:  # one bad file must not stop a long run
+            result.failed += 1
+            status = f"{type(exc).__name__}: {exc}"
+            result.errors.append((f.path, status))
         if on_result:
-            on_result(key, version["status"], version["error"])
-    meta.write_run(outputs_dir, run_id)
-    return run_id
+            on_result(f.path, status)
+    _log(ws, "extract", started, ocr=use_ocr, **result.as_dict())
+    return result
 
 
-def register_manual(
-    meta: Metadata,
-    outputs_dir: Path,
-    key: str,
-    markdown_file: Path,
-    processor: str,
-    run_id: str | None = None,
-    language: str | None = None,
-    quality: Quality | None = None,
-    note: str = "",
+def best_extraction(ws: Workspace, f: SourceFile) -> Extraction | None:
+    """The current local engine's text if there is one, else the newest transcription."""
+    found = list(ws.extractions(f.sha256))
+    local = LOCAL.get(f.category)
+    for e in found:
+        if local and (e.engine, e.version) == (local.name, local.version):
+            return e
+    return found[0] if found else None
+
+
+def register(
+    ws: Workspace,
+    f: SourceFile,
+    text: str,
+    engine: str,
+    accuracy: float | None = None,
+    notes: str = "",
 ) -> Path:
-    """Store hand/LLM-produced markdown as a new version of an already classified source.
-
-    Calling this repeatedly with the same run_id groups files into one output version.
-    """
-    entry = meta.recipes[key]
-    run_id = run_id or new_run_id()
-    meta.start_run(run_id, note)
-    carry_forward(meta, outputs_dir, run_id)
-    text = markdown_file.read_text(encoding="utf-8")
-    language = language or detect_language(text)
-    quality = quality or score_text(text, language)
-    out: Path = Path(run_id) / entry["category"] / f"{entry['slug']}.md"
-    (outputs_dir / out).parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(markdown_file, outputs_dir / out)
-    entry["language"] = language
-    entry["versions"].append(
-        {
-            "version": len(entry["versions"]) + 1,
-            "run_id": run_id,
-            "processor": processor,
-            "sha256": entry["sha256"],
-            "created_at": now_iso(),
-            "status": "ok",
-            "output": out.as_posix(),
-            "error": None,
-            "language": language,
-            "quality": quality.to_dict(),
-        }
+    """Store a transcription made outside the pipeline (by hand or by a vision model)."""
+    target = ws.extraction_path(f.sha256, engine, 1)
+    extraction = Extraction(
+        sha256=f.sha256,
+        engine=engine,
+        version=1,
+        text=text,
+        costly=True,
+        accuracy=accuracy,
+        notes=notes,
     )
-    meta.write_run(outputs_dir, run_id)
-    return out
+    write_json(target, extraction)
+    return target
 
 
-def _comparable(info: dict) -> dict:
-    # label order carries no meaning, so reordering alone must not create a new version
-    labels = {k: sorted(v) for k, v in info.get("labels", {}).items()}
-    return {**info, "labels": labels}
+# --- stage 3 ----------------------------------------------------------------------------
 
 
-def enrich(
-    meta: Metadata,
-    outputs_dir: Path,
-    curation: dict,
-    run_id: str | None = None,
-    note: str = "",
-) -> str | None:
-    """Add refined titles and labels to every recipe's ``recipe{}`` as a new full-copy version.
+def _label(e: Extraction) -> str:
+    return f"{e.engine}@v{e.version}"
 
-    Files whose display title differs from their heading get that heading rewritten in the
-    new version (earlier versions are untouched). Returns None when nothing changed.
-    """
-    run_id = run_id or new_run_id()
-    plan: list[tuple[str, dict, dict, str]] = []
-    for key, entry in meta.recipes.items():
-        latest = next((v for v in reversed(entry["versions"]) if v["status"] == "ok"), None)
-        if latest is None or not (outputs_dir / latest["output"]).is_file():
+
+def run_structure(
+    ws: Workspace,
+    inv: Inventory,
+    engine: str = "rules",
+    limit: int | None = None,
+    force: bool = False,
+    only: set[str] | None = None,
+    on_result: OnResult | None = None,
+) -> StageResult:
+    structurer = STRUCTURERS[engine]
+    started, result = time.time(), StageResult()
+    for f in recipe_files(inv):
+        if only is not None and f.path not in only:
             continue
-        text = (outputs_dir / latest["output"]).read_text(encoding="utf-8")
-        previous = entry.get("recipe", {})
-        info = describe(key, text, curation)
-        if previous.get("original_title"):
-            # the heading may already be retitled, so describe the text under its original title
-            info = describe(
-                key,
-                text.replace(f"# {previous['title']}", f"# {previous['original_title']}", 1),
-                curation,
+        extraction = best_extraction(ws, f)
+        if extraction is None:
+            continue
+        target = ws.structured_path(f.sha256, structurer.name, structurer.version)
+        if target.exists():
+            previous = Structured.model_validate_json(target.read_text(encoding="utf-8"))
+            current = previous.extraction == _label(extraction)
+            if structurer.costly or (current and not force):
+                result.skipped += 1
+                continue
+        if limit is not None and result.done + result.failed >= limit:
+            break
+        try:
+            recipe, usage = structurer.run(extraction.text, Path(f.path).stem)
+            structured = Structured(
+                sha256=f.sha256,
+                engine=structurer.name,
+                version=structurer.version,
+                extraction=_label(extraction),
+                costly=structurer.costly,
+                usage=usage,
+                recipe=recipe,
             )
-        merged = {**previous, **info}
-        if _comparable(merged) != _comparable(previous):
-            plan.append((key, merged, latest, text))
-    if not plan:
-        return None
-    meta.start_run(run_id, note)
-    carry_forward(meta, outputs_dir, run_id)
-    for key, merged, _, text in plan:
-        entry = meta.recipes[key]
-        entry["recipe"] = merged
-        new_version = entry["versions"][-1]
-        if merged["title"] != merged["original_title"] and new_version["run_id"] == run_id:
-            path = outputs_dir / new_version["output"]
-            heading = f"# {merged['original_title']}"
-            if text.startswith(heading):
-                path.write_text(f"# {merged['title']}" + text[len(heading) :], encoding="utf-8")
-            else:
-                path.write_text(f"# {merged['title']}\n\n{text}", encoding="utf-8")
-            new_version.pop("carried_from", None)
-            new_version["processor"] = f"{new_version['processor']}+title-refine"
-    meta.write_run(outputs_dir, run_id)
-    return run_id
+            write_json(target, structured)
+            for k, v in usage.items():
+                result.usage[k] = result.usage.get(k, 0) + v
+            result.done += 1
+            status = "ok"
+        except Exception as exc:  # one bad file must not stop a long run
+            result.failed += 1
+            status = f"{type(exc).__name__}: {exc}"
+            result.errors.append((f.path, status))
+        if on_result:
+            on_result(f.path, status)
+    _log(ws, "structure", started, engine=structurer.label, **result.as_dict())
+    return result
 
 
-def tidy_run(
-    meta: Metadata, outputs_dir: Path, run_id: str | None = None, note: str = ""
-) -> str | None:
-    """Write reader-ready text (no echoed titles, no repeated blocks) as a new full-copy version.
+# --- stage 4 ----------------------------------------------------------------------------
 
-    The raw extraction stays untouched in the previous version; tidied files record
-    ``tidied_from`` (the raw version's run) and how many characters were dropped.
+
+def _choose(
+    ws: Workspace, f: SourceFile, extraction: Extraction | None
+) -> tuple[Structured | None, Assessment]:
+    """Assess every structuring of the current text and keep the most trustworthy one.
+
+    On a tie the deterministic rules win, so an LLM result is only used where it passes
+    checks that the rules failed.
     """
-    run_id = run_id or new_run_id()
-    plan: list[tuple[str, str, str, dict]] = []
-    for key, entry in meta.recipes.items():
-        latest = next((v for v in reversed(entry["versions"]) if v["status"] == "ok"), None)
-        title = (entry.get("recipe") or {}).get("title")
-        if latest is None or not title or "tidy" in latest["processor"]:
-            continue
-        path = outputs_dir / latest["output"]
-        if not path.is_file():
-            continue
-        raw = path.read_text(encoding="utf-8")
-        clean = tidy(raw, title)
-        if clean.split() != raw.split():
-            plan.append((key, clean, raw, latest))
-    if not plan:
-        return None
-    meta.start_run(run_id, note)
-    carry_forward(meta, outputs_dir, run_id)
-    for key, clean, raw, latest in plan:
-        version = meta.recipes[key]["versions"][-1]
-        (outputs_dir / version["output"]).write_text(clean, encoding="utf-8")
-        version.pop("carried_from", None)
-        version["processor"] = f"{latest['processor']}+tidy"
-        version["tidied_from"] = latest["run_id"]
-        version["chars_removed"] = len(raw) - len(clean)
-        version["quality"] = latest.get("quality", version.get("quality"))
-    meta.write_run(outputs_dir, run_id)
-    return run_id
+    if extraction is None:
+        return None, assess(f, None, None)
+    candidates = [
+        (s, assess(f, extraction, s))
+        for s in ws.structured(f.sha256)
+        if s.extraction == _label(extraction)
+    ]
+    if not candidates:
+        return None, assess(f, extraction, None)
+    return min(candidates, key=lambda c: (TIER_RANK[c[1].tier], c[0].costly, len(c[1].reasons)))
 
 
-def spelling_run(
-    meta: Metadata,
-    outputs_dir: Path,
-    fixes: dict[str, str],
-    run_id: str | None = None,
-    note: str = "",
-) -> str | None:
-    """Apply reviewed spelling fixes as a new full-copy version (older versions keep raw text)."""
-    run_id = run_id or new_run_id()
-    plan: list[tuple[str, str, int, dict]] = []
-    for key, entry in meta.recipes.items():
-        latest = next((v for v in reversed(entry["versions"]) if v["status"] == "ok"), None)
-        if latest is None:
+def _words(entry: Entry) -> Counter[str]:
+    return Counter(tokens("\n".join(entry.recipe.lines()))) if entry.recipe else Counter()
+
+
+def _merge_twins(entries: list[Entry]) -> None:
+    """The same recipe saved twice (a .docx and the PDF exported from it): keep one.
+
+    Twins share a display title and at least 90% of their words. The Word file wins, as
+    the editable original; otherwise the shorter path.
+    """
+    groups: dict[str, list[Entry]] = {}
+    for e in entries:
+        if e.assessment.tier == Tier.READY:
+            groups.setdefault(fold(e.title), []).append(e)
+    for group in groups.values():
+        group.sort(key=lambda e: (e.category != Category.DOCX_FILES, len(e.source), e.source))
+        kept: list[tuple[Entry, Counter[str]]] = []
+        for e in group:
+            words = _words(e)
+            twin = next((k for k, w in kept if _similarity(w, words) >= TWIN_SIMILARITY), None)
+            if twin is None:
+                kept.append((e, words))
+                continue
+            e.assessment.tier = Tier.EXCLUDED
+            e.assessment.reasons = [f"same recipe as {twin.source}"]
+            twin.duplicates.append(e.source)
+
+
+def _similarity(a: Counter[str], b: Counter[str]) -> float:
+    return sum((a & b).values()) / max(sum((a | b).values()), 1)
+
+
+def _distinct_titles(entries: list[Entry], curation: Curation) -> None:
+    """Different recipes with one title ('Þorskur') get their file or folder name added."""
+    groups: dict[str, list[Entry]] = {}
+    for e in entries:
+        if e.assessment.tier == Tier.READY and e.recipe:
+            groups.setdefault(fold(e.title), []).append(e)
+    for group in groups.values():
+        if len(group) < 2:
             continue
-        path = outputs_dir / latest["output"]
-        if not path.is_file():
-            continue
-        fixed, n = fix_spelling(path.read_text(encoding="utf-8"), fixes)
-        if n:
-            plan.append((key, fixed, n, latest))
-    if not plan:
-        return None
-    meta.start_run(run_id, note)
-    carry_forward(meta, outputs_dir, run_id)
-    for key, fixed, n, latest in plan:
-        version = meta.recipes[key]["versions"][-1]
-        (outputs_dir / version["output"]).write_text(fixed, encoding="utf-8")
-        version.pop("carried_from", None)
-        base = latest["processor"].removesuffix("+spelling")
-        version["processor"] = f"{base}+spelling"
-        version["spelling_fixes"] = n
-    meta.write_run(outputs_dir, run_id)
-    return run_id
+        for hint in (_file_hint, _folder_hint):
+            clashing = [e for e in group if sum(fold(o.title) == fold(e.title) for o in group) > 1]
+            for e in clashing:
+                h = hint(e)
+                if Path(e.source).stem in curation.titles or fold(h) in fold(e.title):
+                    continue
+                # 'Aðalbláber & rjómi (tasting).pdf' is just a more specific title
+                e.title = h if fold(h).startswith(fold(e.title)) else f"{e.title} ({h})"
+
+
+def _file_hint(e: Entry) -> str:
+    return refine_title(Path(e.source).stem, e.recipe or Recipe(title=""), "", {})
+
+
+def _folder_hint(e: Entry) -> str:
+    return Path(e.source).parent.name or "top folder"
+
+
+def build_catalog(ws: Workspace, inv: Inventory, curation: Curation) -> Catalog:
+    started = time.time()
+    copies: dict[str, list[str]] = {}
+    for f in inv.files.values():
+        if f.duplicate_of:
+            copies.setdefault(f.duplicate_of, []).append(f.path)
+    entries = []
+    for f in inv.canonical():
+        stem = Path(f.path).stem
+        extraction = best_extraction(ws, f) if f.kind == Kind.RECIPE else None
+        structured, assessment = _choose(ws, f, extraction)
+        if stem in curation.tier and assessment.tier != Tier.EXCLUDED:
+            assessment.tier = curation.tier[stem]
+            assessment.reasons.append("tier set by hand in curation.json")
+        entry = Entry(
+            id=f.sha256[:12],
+            source=f.path,
+            category=f.category,
+            kind=f.kind,
+            pages=f.pages,
+            duplicates=sorted(copies.get(f.path, [])),
+            assessment=assessment,
+            title=stem,
+        )
+        if structured and extraction:
+            recipe = structured.recipe
+            entry.extraction = _label(extraction)
+            entry.structure = f"{structured.engine}@v{structured.version}"
+            entry.title = refine_title(recipe.title, recipe, stem, curation.titles)
+            paths = "\n".join([f.path, *entry.duplicates])  # copies in other folders add hints
+            entry.labels = detect_labels(entry.title, paths, recipe) | curation.labels.get(stem, {})
+            entry.recipe = recipe
+        entries.append(entry)
+    _merge_twins(entries)
+    _distinct_titles(entries, curation)
+    entries.sort(key=lambda e: (TIER_RANK[e.assessment.tier], e.title.casefold()))
+    catalog = Catalog(entries=entries)
+    write_json(ws.catalog_path, catalog)
+    ws.report_path.write_text(render_report(catalog, inv), encoding="utf-8")
+    counts = {t.value: len(catalog.by_tier(t)) for t in Tier}
+    _log(ws, "catalog", started, **counts)
+    return catalog

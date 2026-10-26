@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-TEMPLATE = Path(__file__).with_name("locked_template.html")
+TEMPLATE = Path(__file__).parent / "templates" / "locked.html"
 ITERATIONS = 600_000
 
 

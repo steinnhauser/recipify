@@ -1,34 +1,17 @@
-"""Display titles and auto-detected labels (keyword rules; no AI calls).
+"""Display titles and labels (course, dish, diet, cuisine, main ingredients).
 
-Manual corrections live in ``curation.json`` (keys are original file stems):
-``{"titles": {stem: title}, "labels": {stem: {facet: [..]}}, "kind": {stem: "reference"}}``.
+Transparent keyword rules over Icelandic and English text; no AI calls. Patterns run on
+folded text (no accents, þ->th, ð->d), so one pattern covers every spelling. Ingredient and
+diet labels look only at the ingredient lines when there are any, so a garnish mentioned in
+the method does not change the diet. Manual corrections live in ``curation.json``.
 """
 
-import json
 import re
-from pathlib import Path
-from typing import Any
 
-LABEL_METHOD = "keywords-v1"
+from recipify.models import Recipe
+from recipify.text import fix_mojibake, fold
+
 FACETS = ("course", "dish", "diet", "cuisine", "ingredients")
-
-
-def fold(text: str) -> str:
-    """Lowercase, strip accents and map Icelandic letters so one pattern covers spellings."""
-    import unicodedata
-
-    text = text.lower().replace("þ", "th").replace("ð", "d").replace("æ", "ae").replace("ö", "o")
-    return "".join(c for c in unicodedata.normalize("NFD", text) if not unicodedata.combining(c))
-
-
-def fix_mojibake(text: str) -> str:
-    """Repair names that were cp850 bytes shown as latin-1 (e.g. 'S¢sa' -> 'Sósa')."""
-    if not re.search(r"[¢£\x80-\x9f]", text):
-        return text
-    try:
-        return text.encode("latin-1").decode("cp850")
-    except UnicodeError:
-        return text
 
 
 def _rx(*words: str) -> re.Pattern[str]:
@@ -42,7 +25,7 @@ INGREDIENTS = {
     "pork": _rx(
         "svina", "svin", "pork", "bacon", "beikon", "skinka", "ham\\b", "prosciutto", "pancetta"
     ),
-    "chicken": _rx("kjukling", "chicken"),
+    "chicken": _rx("kjukling(?!abaun)", "chicken"),
     "duck": _rx("anda(?:bring|laeri|fit)", "duck", "andar"),
     "goose": _rx("gaes", "goose"),
     "fish": _rx(
@@ -54,6 +37,8 @@ INGREDIENTS = {
         "haddock",
         "bleikj",
         "arctic char",
+        "artic char",
+        "charr",
         "silung",
         "urrida",
         "trout",
@@ -154,23 +139,10 @@ INGREDIENTS = {
 MEAT_FISH = {"lamb", "beef", "pork", "chicken", "duck", "goose", "fish", "shellfish", "gelatin"}
 ANIMAL_OTHER = {"dairy", "egg", "honey"}
 SHOW_INGREDIENTS = 5
-GENERIC = {
-    "citrus",
-    "onion & garlic",
-    "vegetables",
-    "dairy",
-    "egg",
-    "honey",
-    "nuts",
-    "berries",
-    "apple",
-    "tomato",
-    "potato",
-}
 
 COURSES = {
     "starter": _rx("forrett", "starter", "appetizer", "appetiser", "amuse"),
-    "main": _rx("adalrett", "main course", "entree", "aðalrétt"),
+    "main": _rx("adalrett", "main course", "mains\\b", "entree"),
     "dessert": _rx(
         "eftirrett",
         "dessert",
@@ -199,6 +171,7 @@ COURSES = {
     ),
     "bread & pastry": _rx(
         "bakari",
+        "bakery",
         "brauð",
         "braud",
         "bread",
@@ -461,81 +434,37 @@ CUISINES = {
     ),
 }
 
-REFERENCE_NAME = _rx(
-    "missi",
-    "magnutreikn",
-    "simaskra",
-    "thrifaplan",
-    "hladbord",
-    "utreikn",
-    "starfsmenn",
-    "verdutreikn",
-    "pantanir",
-)
-
-COURSE_ALIASES = {
-    "starter",
-    "main",
-    "dessert",
-    "bread & pastry",
-    "sauce & basics",
-    "breakfast",
-    "drink",
-    "snack & canapé",
-    "side",
-}
 UNTITLED = re.compile(
     r"untitled|^\d{6,}$|^(?:new|nytt|document|doc|scan|img|image|copy of)\b|^recipe$", re.I
 )
 
 
-def load_curation(path: Path) -> dict[str, Any]:
-    if path.is_file():
-        curation: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-        return curation
-    return {"titles": {}, "labels": {}, "kind": {}}
-
-
-def _first_heading(text: str) -> str | None:
-    m = re.search(r"^#\s+(.+)$", text, re.M)
-    return m.group(1).strip() if m else None
-
-
-def _content_title(text: str) -> str | None:
-    """First short plain line after the heading: a better name for 'untitled' files."""
-    lines = [ln.strip() for ln in text.splitlines()]
-    for ln in lines[1:]:
-        ln = re.sub(r"^[#>*|\s-]+|[*|\s]+$", "", ln)
-        if (
-            3 <= len(ln) <= 60
-            and not ln.isdigit()
-            and not ln.lower().startswith(("page", "transcribed"))
-        ):
-            return ln
-    return None
-
-
-def refine_title(original: str, text: str, stem: str, curated: dict[str, str]) -> str:
+def refine_title(title: str, recipe: Recipe, stem: str, curated: dict[str, str]) -> str:
+    """A readable display title; the original stays in the catalog and the recipe footer."""
     if stem in curated:
         return curated[stem]
-    title = fix_mojibake(original)
+    title = fix_mojibake(title)
     title = re.sub(r"(?<=\d)_(?=\d)", ".", title)
     title = re.sub(r"_+", " ", title)
     title = re.sub(r"\s*\(\d{1,2}\)$", "", title)
     title = re.sub(r"\s{2,}", " ", title).strip(" :.,;–-")
-    if UNTITLED.search(title):
-        title = _content_title(text) or title
+    title = re.sub(r"^[^\w(#]+", "", title)  # "‚BBQ Sósa" (a stray low quote)
+    if UNTITLED.search(title) or "\ufffd" in title:  # "Untitled", "IMG_0042", a broken character
+        title = next((s.name for s in recipe.sections if s.name), "") or title
     if len(title) > 3 and title.isupper() and " " in title:
         title = title.capitalize()
-    return title[:1].upper() + title[1:] if title else original
+    return title[:1].upper() + title[1:]
 
 
 def _counts(patterns: dict[str, re.Pattern[str]], text: str) -> dict[str, int]:
     return {k: len(p.findall(text)) for k, p in patterns.items() if p.search(text)}
 
 
-def detect_labels(title: str, source: str, text: str) -> dict[str, list[str]]:
-    ft, fp, fx = fold(title), fold(source), fold(text)
+def detect_labels(title: str, source: str, recipe: Recipe) -> dict[str, list[str]]:
+    lines = recipe.lines()
+    ingredient_lines = [i.text for s in recipe.sections for i in s.ingredients]
+    ft, fp, fx = fold(title), fold(source), fold("\n".join(lines))
+    fi = fold("\n".join(ingredient_lines)) if ingredient_lines else fx
     labels: dict[str, list[str]] = {f: [] for f in FACETS}
 
     scores: dict[str, int] = {}
@@ -547,9 +476,8 @@ def detect_labels(title: str, source: str, text: str) -> dict[str, list[str]]:
 
     labels["dish"] = [d for d, rx in DISH.items() if rx.search(ft) or len(rx.findall(fx)) >= 4][:3]
 
-    counts = _counts(INGREDIENTS, fx)
+    counts = _counts(INGREDIENTS, fi)
     ranked = sorted(counts, key=lambda k: (-counts[k], k))
-    present = {k for k, n in counts.items() if n >= 1}
     labels["ingredients"] = [k for k in ranked if k not in {"dairy", "egg", "honey", "gelatin"}][
         :SHOW_INGREDIENTS
     ]
@@ -557,12 +485,15 @@ def detect_labels(title: str, source: str, text: str) -> dict[str, list[str]]:
         labels["ingredients"] = ["dairy"]
 
     diet: list[str] = []
-    if len(fx) >= 200 and not (present & MEAT_FISH):
-        diet = ["vegetarian", "vegan"] if not present & ANIMAL_OTHER else ["vegetarian"]
+    anywhere = set(_counts(INGREDIENTS, ft + "\n" + fx))  # a steak in the plating list counts
+    if len(fx) >= 200 and not (anywhere & MEAT_FISH):
+        diet = ["vegetarian", "vegan"] if not anywhere & ANIMAL_OTHER else ["vegetarian"]
     elif len(fx) >= 200:
         # themes: only when the animal ingredient is a real part of the dish
+        need = 1 if ingredient_lines else 2  # free text mentions garnishes in passing
+
         def strong(names: set[str]) -> bool:
-            return any(counts.get(n, 0) >= 2 or INGREDIENTS[n].search(ft) for n in names)
+            return any(counts.get(n, 0) >= need or INGREDIENTS[n].search(ft) for n in names)
 
         if strong({"fish", "shellfish"}):
             diet.append("seafood")
@@ -576,29 +507,8 @@ def detect_labels(title: str, source: str, text: str) -> dict[str, list[str]]:
 
     cuis = {}
     for name, rx in CUISINES.items():
-        hits = {m for m in rx.findall(fx)}
-        n = len(hits) + 2 * bool(rx.search(ft))
+        n = len(set(rx.findall(fx))) + 2 * bool(rx.search(ft))
         if n >= 3:
             cuis[name] = n
     labels["cuisine"] = sorted(cuis, key=lambda c: -cuis[c])[:2]
     return labels
-
-
-def describe(key: str, text: str, curation: dict[str, Any]) -> dict[str, Any]:
-    stem = Path(key).stem
-    original = _first_heading(text) or stem
-    title = refine_title(original, text, stem, curation.get("titles", {}))
-    labels = detect_labels(title, key, text)
-    for facet, values in curation.get("labels", {}).get(stem, {}).items():
-        labels[facet] = values
-    kind = curation.get("kind", {}).get(stem) or (
-        "reference" if REFERENCE_NAME.search(fold(stem)) else "recipe"
-    )
-    return {
-        "title": title,
-        "original_title": original,
-        "original_filename": Path(key).name,
-        "kind": kind,
-        "labels": labels,
-        "label_method": LABEL_METHOD,
-    }
