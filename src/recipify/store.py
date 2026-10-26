@@ -6,6 +6,7 @@ Layout of the data directory::
     extractions/<sha256>/<engine>@v<N>.json   stage 2: text per document and extractor version
     recipes/<sha256>/<engine>@v<N>.json       stage 3: structured recipe per structurer version
     catalog.json, report.md             stage 4: assessed recipes and the human-readable summary
+    history/<time>.json                 every catalog run's tier per document (progress over time)
     runs.jsonl                          append-only log of every stage run
 
 Artifacts are keyed by the source's content hash, so duplicates share work, renamed files
@@ -72,9 +73,6 @@ class Workspace:
     def structured_path(self, sha256: str, engine: str, version: int) -> Path:
         return self.data / "recipes" / sha256 / f"{engine}@v{version}.json"
 
-    def has_extraction(self, sha256: str) -> bool:
-        return any((self.data / "extractions" / sha256).glob("*.json"))
-
     def extractions(self, sha256: str) -> Iterator[Extraction]:
         """All stored extractions of a document, newest first."""
         found = [
@@ -89,6 +87,20 @@ class Workspace:
             for p in (self.data / "recipes" / sha256).glob("*.json")
         ]
         yield from sorted(found, key=lambda s: s.created_at, reverse=True)
+
+    def latest_snapshot(self) -> dict[str, str]:
+        """Tier per source from the previous catalog run (empty on the first run)."""
+        snapshots = sorted((self.data / "history").glob("*.json"))
+        if not snapshots:
+            return {}
+        tiers: dict[str, str] = json.loads(snapshots[-1].read_text(encoding="utf-8"))["tiers"]
+        return tiers
+
+    def save_snapshot(self, created_at: str, tiers: dict[str, str]) -> None:
+        name = created_at.replace(":", "").replace("+0000", "Z")
+        write_json(
+            self.data / "history" / f"{name}.json", {"created_at": created_at, "tiers": tiers}
+        )
 
     def log_run(self, record: dict[str, Any]) -> None:
         self.data.mkdir(parents=True, exist_ok=True)

@@ -180,7 +180,7 @@ def main() -> None:
     shutil.copy(plokkfiskur, OUT / "Old/Plokkfiskur (1).pdf")  # an exact copy
     pdf_from([md["potato-gratin"]], OUT / "Restaurant/Sides/Potato gratin.pdf")
     pdf_from([md["smoked-trout-canape"]], OUT / "Restaurant/Canapés/Smoked trout canapé.pdf")
-    with tempfile.TemporaryDirectory() as tmp:  # a photo of a printed recipe: needs OCR
+    with tempfile.TemporaryDirectory() as tmp:  # a photo of a printed recipe: needs a transcription
         (OUT / "Scans").mkdir()
         to_png(
             pdf_from([md["beetroot-salad"]], Path(tmp) / "b.pdf"), OUT / "Scans/Beetroot salad.png"

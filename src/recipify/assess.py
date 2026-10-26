@@ -12,7 +12,7 @@ the reasons, and the report lists them.
 import re
 from collections import Counter
 
-from recipify.categories import NEEDS_OCR, Category
+from recipify.categories import NO_TEXT_LAYER, Category
 from recipify.models import Assessment, Extraction, Kind, Recipe, SourceFile, Structured, Tier
 from recipify.text import tokens
 
@@ -102,6 +102,8 @@ def _excluded(file: SourceFile) -> str | None:
         return f"book{pages}: not split into recipes yet"
     if file.kind == Kind.REFERENCE:
         return "reference material, not a recipe"
+    if file.kind == Kind.PHOTO:
+        return "photo of a dish, not a recipe"
     if file.category in (Category.EMPTY_OR_CORRUPTED, Category.IGNORED, Category.OTHER_FORMATS):
         return f"{file.category.value.replace('_', ' ')}: {file.reason}"
     return None
@@ -113,7 +115,11 @@ def assess(
     if reason := _excluded(file):
         return Assessment(tier=Tier.EXCLUDED, reasons=[reason])
     if extraction is None:
-        missing = "needs OCR, not run yet" if file.category in NEEDS_OCR else "not extracted yet"
+        missing = (
+            "needs a transcription (no text layer)"
+            if file.category in NO_TEXT_LAYER
+            else "not extracted yet"
+        )
         return Assessment(tier=Tier.EXCLUDED, reasons=[missing])
     if structured is None:
         return Assessment(tier=Tier.EXCLUDED, reasons=["not structured yet"])
@@ -129,7 +135,7 @@ def assess(
     agreement = extraction.checks.get("order_agreement")
     reasons: list[str] = []
 
-    if file.category in NEEDS_OCR:
+    if file.category in NO_TEXT_LAYER:
         reasons.append("read from images: cannot be checked against a text layer")
     if file.category == Category.SPREADSHEETS:
         reasons.append("spreadsheet: tables are not structured into recipes yet")

@@ -2,21 +2,10 @@
 # Recipe data: never commit (the repository is public).
 # Only the encrypted page in site/ is published; see README "Publishing".
 # ---------------------------------------------------------------------------
-# Sources, pipeline artifacts and viewer builds
+# Sources, pipeline artifacts (incl. curation.json) and viewer builds
 /recipes/
 /data/
 /dist/
-# Output of earlier pipeline versions
-/sorted/
-/outputs/
-/viewer/
-/share/
-# Per-recipe metadata, notes and curation (titles, filenames, typo lists from the texts)
-metadata.json
-my_recipes.csv
-curation.json
-spelling.json
-rename_plan.sh
 # Recipe documents, scans, photos and archives, wherever they turn up
 *.pdf
 *.doc

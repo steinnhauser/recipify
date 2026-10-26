@@ -44,14 +44,19 @@ def test_stage_by_stage(workdir: Path):
     assert (workdir / "out/index.html").is_file()
 
 
-def test_run_review_only_and_errors(workdir: Path):
+def test_run_and_errors(workdir: Path):
     assert "Report:" in invoke("run")
-    out = invoke("structure", "--review-only", "--force")
-    assert "1 structured" in out  # only the docx is in review (too short)
-    assert "unknown engine" in fails("structure", "--engine", "nope")
+    assert "1 structured" in invoke("structure", "--force", "--limit", "1")
     assert "not a directory" in str(
         runner.invoke(cli.app, ["--sources", "missing", "run"]).exception
     )
+
+
+def test_pages(workdir: Path):
+    out = invoke("pages", "Handbook.pdf", "--out", "pages", "--dpi", "20")
+    assert "pages/Handbook-01.jpg" in out and "recipify register Handbook.pdf" in out
+    assert "pages/photo.jpg" in invoke("pages", "photo.jpg", "--out", "pages")
+    assert "not found" in fails("pages", "nope.pdf")
 
 
 def test_run_reports_failures(workdir: Path, monkeypatch: pytest.MonkeyPatch):
@@ -63,16 +68,6 @@ def test_run_reports_failures(workdir: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setitem(LOCAL, Category.DOCX_FILES, Engine("broken", 1, broken))
     assert "failed Eftirréttir/Skyrkaka.docx: ValueError: unreadable" in invoke("run")
-
-
-def test_structure_reports_usage(workdir: Path, monkeypatch: pytest.MonkeyPatch):
-    from recipify.models import Recipe
-    from recipify.structure import STRUCTURERS, Structurer
-
-    invoke("run")
-    fake = Structurer("fake", 1, lambda t, n: (Recipe(title=n), {"prompt_tokens": 5}), costly=True)
-    monkeypatch.setitem(STRUCTURERS, "fake", fake)
-    assert "API usage: {'prompt_tokens': 10}" in invoke("structure", "--engine", "fake")
 
 
 def test_register(workdir: Path):

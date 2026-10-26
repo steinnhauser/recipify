@@ -15,7 +15,7 @@ These fictional recipes were written for this project. They show the pipeline on
 | `Restaurant/Eftirréttir/Skyr og bláber.pdf` | a two-column, three-component Icelandic recipe | ready |
 | `Old/Plokkfiskur (1).pdf` | an exact copy | merged into its original |
 | `Restaurant/Desserts/Chocolate mousse.pdf` | the PDF twin of a `.docx` | excluded (same recipe) |
-| `Scans/Beetroot salad.png` | a photo | excluded (needs OCR) |
+| `Scans/Beetroot salad.png` | a photo of a printed recipe | excluded (needs a transcription) |
 | `Kitchen handbook 2019.pdf` | a 14-page book | excluded (book) |
 | `Missi listi.docx` | a mise en place list | excluded (reference) |
 | `Costing - lamb shank.xlsx` | a costing sheet | review (spreadsheet) |

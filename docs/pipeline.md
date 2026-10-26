@@ -5,8 +5,8 @@ This document explains how recipify decides that a recipe can be trusted, and ho
 ## Goals
 
 1. **Faithful.** A published recipe says exactly what its source document says, with nothing lost, corrected or invented, laid out so it is as easy to follow as the original.
-2. **Honest about difficulty.** Some documents are easy wins (a Word file or a PDF exported from one). Others need OCR, are whole books, or are not recipes at all. The pipeline sorts them and says why.
-3. **Cheap to re-run.** Every key step is stored. Re-running skips finished work, and paid work (OCR, LLM calls, hand transcriptions) is never done twice.
+2. **Honest about difficulty.** Some documents are easy wins (a Word file or a PDF exported from one). Others are scans that need a transcription, are whole books, or are not recipes at all. The pipeline sorts them and says why.
+3. **Cheap to re-run.** Every key step is stored. Re-running skips finished work, and transcriptions of scans are never overwritten.
 
 ## Artifacts and caching
 
@@ -14,11 +14,12 @@ This document explains how recipify decides that a recipe can be trusted, and ho
 data/
   inventory.json                          every source file: sha256, category, kind, pages, copies
   extractions/<sha256>/poppler@v2.json    text per document and engine version
-  extractions/<sha256>/vision-transcription@v1.json
+  extractions/<sha256>/vision@v1.json     a registered transcription of a scan
   recipes/<sha256>/rules@v1.json          structured recipe per structurer version
   catalog.json                            every unique document with its assessment
   report.md                               the human-readable summary and review list
-  runs.jsonl                              one line per stage run: counts, seconds, API usage
+  history/<time>.json                     every catalog run's tier per document (report.md lists the changes)
+  runs.jsonl                              one line per stage run: counts and seconds
   curation.json                           manual overrides (titles, labels, kind, tier)
 ```
 
@@ -48,7 +49,7 @@ data/
 | Word (`.docx`) | `python-docx` (own XML walker) | Reads text boxes (common in recipe templates; python-docx skips them), keeps soft line breaks, skips Word's duplicate fallback content, and doesn't repeat merged table cells. |
 | `.doc`, `.odt`, `.pptx` | `libreoffice` | Converted to docx or PDF, then read as above. |
 | Spreadsheets | `openpyxl` | One line per row. |
-| Scans, photos | `mistral-ocr` (opt-in, paid), or `register` | A transcription made by hand or by a vision model can be stored with `recipify register`. |
+| Scans, photos of recipes | `register` | `recipify pages` writes the page images. A transcription made from them, by hand or with a vision model, is stored with `recipify register` as `<engine>@v<N>`, and is never overwritten. Photos of plated dishes (in folders such as `Myndir`) are recognised and excluded. |
 
 **Reading-order check.** Every line from the raw extraction must appear, whole, in the layout rendering of the same pages. On the real archive the two agree on every line for 349 of 356 short PDFs. The rest are PDFs whose text is stored in fragments. They go to review rather than risking a recipe with lines in the wrong order.
 
@@ -70,11 +71,6 @@ The parser is a small state machine (`start`, `ingredients`, `method`) with a fe
 
 The parser never edits text. Each source line ends up in exactly one place, which is what makes the fidelity check below meaningful.
 
-[`structure/llm.py`](../src/recipify/structure/llm.py) is an opt-in fallback for layouts the rules can't follow:
-
-- It calls Mistral with temperature 0 and a strict JSON schema generated from a pydantic model.
-- The prompt asks it to copy every line verbatim.
-- Its output gets no special trust: it goes through the same assessment, and when both a rules result and an LLM result exist for the same text, the catalog keeps whichever passes more checks, preferring the rules on a tie.
 
 ## Stage 4: assess
 
@@ -103,6 +99,6 @@ The catalog then:
 
 ## What is not done yet
 
-- **Scans and photos (325 documents).** The pipeline is ready (`extract --ocr`, `register`), but there is no text layer to check against. An OCR or vision transcription can only reach `review` until a person has checked it.
+- **Scans (18 photographed recipe pages, plus 12 scanned PDFs).** `pages` and `register` are ready, but there is no text layer to check against, so a transcription stays in `review` until a person has checked it. Internal arithmetic can help: a scaling table whose columns are multiples of the first, and whose totals are sums, checks its own numbers.
 - **Books and collections.** They need splitting into single recipes before they can be checked one by one.
 - **Spreadsheets.** Costing and yield sheets need a table-aware structurer.

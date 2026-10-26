@@ -23,6 +23,8 @@ REFERENCE_NAME = re.compile(
     r"\b(?:missi|magnutreikn|simaskra|thrif|hladbord|utreikn|starfsm|verdutreikn|pantanir"
     r"|\w*sedill|menu|eldunartim|reglur|rules|rutina|vaktstjor|innihaldslys|leidarbok)"
 )
+# Folders of dish photos ("Myndir" is Icelandic for pictures): images there are not recipes.
+PHOTO_FOLDERS = {"myndir", "photos", "pictures", "images", "img"}
 COPY_MARKER = re.compile(r"\(\d+\)|\bcopy\b|afrit", re.I)
 
 
@@ -38,6 +40,9 @@ def triage(path: str, category: Category, pages: int | None, curation: Curation)
     stem = Path(path).stem
     if stem in curation.kind:
         return curation.kind[stem]
+    folders = {fold(part) for part in Path(path).parts[:-1]}
+    if category == Category.IMAGE_FILES and folders & PHOTO_FOLDERS:
+        return Kind.PHOTO
     if category == Category.EPUB_BOOKS or (pages or 0) > MAX_RECIPE_PAGES:
         return Kind.BOOK
     if REFERENCE_NAME.search(fold(stem)):

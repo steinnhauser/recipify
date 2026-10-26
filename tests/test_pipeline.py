@@ -23,7 +23,6 @@ from recipify.models import (
 )
 from recipify.report import reason_group
 from recipify.store import Workspace, write_json
-from recipify.structure import STRUCTURERS, Structurer
 
 
 def _source(**kw) -> SourceFile:
@@ -56,6 +55,8 @@ def test_inventory_triage_and_duplicates(ws: Workspace):
 
 
 def test_triage():
+    assert triage("Myndir/Eftirréttir/Kaka.jpg", Category.IMAGE_FILES, None, Curation()) == Kind.PHOTO
+    assert triage("Advanced Pastry 3.jpeg", Category.IMAGE_FILES, None, Curation()) == Kind.RECIPE
     assert triage("Missi morgunvakt.xlsx", Category.SPREADSHEETS, None, Curation()) == Kind.REFERENCE
     assert triage("Hópaseðill.pdf", Category.READABLE_PDFS, 1, Curation()) == Kind.REFERENCE
     assert triage("Bók.epub", Category.EPUB_BOOKS, None, Curation()) == Kind.BOOK
@@ -75,7 +76,6 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert st.done == 2
     assert pipeline.run_structure(ws, inv).skipped == 2
     assert pipeline.run_structure(ws, inv, force=True, limit=1).done == 1
-    assert pipeline.run_structure(ws, inv, only={"Bakarí/Tartdeig.pdf"}, force=True).done == 1
 
     catalog = pipeline.build_catalog(ws, inv, Curation(titles={"Skyrkaka": "Skyrkaka góða"}))
     by_source = {e.source: e for e in catalog.entries}
@@ -89,9 +89,15 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert by_source["Handbook.pdf"].assessment.reasons == [
         "book (10 pages): not split into recipes yet"
     ]
-    assert by_source["photo.jpg"].assessment.reasons == ["needs OCR, not run yet"]
+    assert by_source["photo.jpg"].assessment.reasons == ["needs a transcription (no text layer)"]
     report = ws.report_path.read_text()
     assert "**1 recipes ready**" in report and "## Review list" in report
+    assert "Changes since the last run" not in report  # the first run has nothing to compare
+    pipeline.register(ws, inv.files["photo.jpg"], "Rauðrófur\n4 rauðrófur", "vision")
+    pipeline.run_structure(ws, inv)
+    pipeline.build_catalog(ws, inv, Curation())
+    assert "- `photo.jpg`: excluded -> review" in ws.report_path.read_text()
+    assert len(list((ws.data / "history").glob("*.json"))) >= 1
     log = [json.loads(line) for line in (ws.data / "runs.jsonl").read_text().splitlines()]
     assert [r["stage"] for r in log][:2] == ["inventory", "extract"]
 
@@ -114,37 +120,16 @@ def test_failures_are_reported_not_fatal(ws: Workspace, monkeypatch: pytest.Monk
     ]
 
 
-def test_costly_engines_never_rerun(ws: Workspace, monkeypatch: pytest.MonkeyPatch):
+def test_transcriptions_are_never_overwritten(ws: Workspace):
     inv = pipeline.run_inventory(ws, Curation())
     photo = inv.files["photo.jpg"]
-    calls: list[Path] = []
-
-    def fake_ocr(path: Path):
-        calls.append(path)
-        return "Rauðrófur\n4 rauðrófur\n200 g skyr\nAðferð:\nBakað.", {}
-
-    ocr = Engine("ocr", 1, fake_ocr, costly=True)
-    monkeypatch.setattr(
-        pipeline, "engine_for", lambda c, _: ocr if c == Category.IMAGE_FILES else None
-    )
-    pipeline.run_extract(ws, inv, use_ocr=True)
-    pipeline.run_extract(ws, inv, use_ocr=True, force=True)
-    assert len(calls) == 1
-    assert pipeline.best_extraction(ws, photo).engine == "ocr"
-
-    out = pipeline.register(ws, photo, "Rauðrófur\n2 egg", "vision", 0.9, "by hand")
-    assert out.name == "vision@v1.json"
-    llm_calls: list[str] = []
-
-    def fake_llm(text: str, title: str):
-        llm_calls.append(text)
-        return Recipe(title="Rauðrófur"), {"prompt_tokens": 10}
-
-    monkeypatch.setitem(STRUCTURERS, "fake", Structurer("fake", 1, fake_llm, costly=True))
-    first = pipeline.run_structure(ws, inv, engine="fake")
-    assert first.usage == {"prompt_tokens": 10}  # only the photo has text in this test
-    assert pipeline.run_structure(ws, inv, engine="fake", force=True).skipped == 1
-    assert len(llm_calls) == 1
+    text = "Rauðrófur\n4 rauðrófur\n200 g skyr\nAðferð:\nBakað."
+    first = pipeline.register(ws, photo, text, "vision", 0.9, "by hand")
+    second = pipeline.register(ws, photo, text + "\nSalt.", "vision")
+    assert (first.name, second.name) == ("vision@v1.json", "vision@v2.json")
+    assert pipeline.best_extraction(ws, photo).version == 2
+    assert pipeline.run_extract(ws, inv, force=True).done == 2  # the photo has no local engine
+    pipeline.run_structure(ws, inv)
     catalog = pipeline.build_catalog(ws, inv, Curation())
     photo_entry = next(e for e in catalog.entries if e.source == "photo.jpg")
     assert photo_entry.assessment.tier == Tier.REVIEW
@@ -156,11 +141,11 @@ def test_structure_failures(ws: Workspace, monkeypatch: pytest.MonkeyPatch):
     pipeline.run_extract(ws, inv)
 
     def broken(text: str, title: str):
-        raise RuntimeError("model down")
+        raise RuntimeError("parser bug")
 
-    monkeypatch.setitem(STRUCTURERS, "broken", Structurer("broken", 1, broken))
-    result = pipeline.run_structure(ws, inv, engine="broken")
-    assert result.failed == 2 and "model down" in result.errors[0][1]
+    monkeypatch.setattr(pipeline.rules, "structure", broken)
+    result = pipeline.run_structure(ws, inv)
+    assert result.failed == 2 and "parser bug" in result.errors[0][1]
     catalog = pipeline.build_catalog(ws, inv, Curation())
     tart = next(e for e in catalog.entries if e.source == "Bakarí/Tartdeig.pdf")
     assert tart.assessment.reasons == ["not structured yet"]
@@ -256,6 +241,7 @@ def test_assessment_reasons():
         (dict(duplicate_of="b.pdf"), "duplicate of b.pdf"),
         (dict(kind=Kind.BOOK), "book: not split into recipes yet"),
         (dict(kind=Kind.REFERENCE), "reference material, not a recipe"),
+        (dict(kind=Kind.PHOTO), "photo of a dish, not a recipe"),
         (dict(category=Category.IGNORED, reason="lock file"), "ignored: lock file"),
         (dict(category=Category.DOCX_FILES), "not extracted yet"),
     ],

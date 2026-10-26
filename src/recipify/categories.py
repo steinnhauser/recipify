@@ -8,8 +8,8 @@ class Category(StrEnum):
     DOCX_FILES = "docx_files"  # Word .docx: exact text, local
     LEGACY_OFFICE = "legacy_office"  # .doc/.odt/.rtf/.pptx: exact text via LibreOffice
     SPREADSHEETS = "spreadsheets"  # .xls/.xlsx/.csv: tables, local
-    IMAGE_BASED_PDFS = "image_based_pdfs"  # scans without a text layer: OCR or vision
-    IMAGE_FILES = "image_files"  # photos of recipes: OCR or vision
+    IMAGE_BASED_PDFS = "image_based_pdfs"  # scans without a text layer: need a transcription
+    IMAGE_FILES = "image_files"  # photos: of recipes (transcribe) or of dishes
     EPUB_BOOKS = "epub_books"  # e-books (some misnamed .pdf)
     EMPTY_OR_CORRUPTED = "empty_or_corrupted"  # zero bytes, unreadable, no content
     IGNORED = "ignored"  # lock files, .DS_Store, shortcuts, archives
@@ -23,5 +23,5 @@ TEXT_LAYER = {
     Category.LEGACY_OFFICE,
     Category.SPREADSHEETS,
 }
-# Text has to be read from pixels: costs API credits and cannot be checked against a source.
-NEEDS_OCR = {Category.IMAGE_BASED_PDFS, Category.IMAGE_FILES}
+# Text has to be read from pixels: a transcription cannot be checked against a text layer.
+NO_TEXT_LAYER = {Category.IMAGE_BASED_PDFS, Category.IMAGE_FILES}

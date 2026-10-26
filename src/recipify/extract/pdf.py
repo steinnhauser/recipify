@@ -56,3 +56,10 @@ def extract_pdf(path: Path) -> tuple[str, dict[str, float]]:
     text = "\n\f\n".join(p.strip("\n") for p in raw.split("\f") if p.strip())  # \f: new page
     agreement = order_agreement(raw, pdf_text(path, "layout"))
     return text.strip() + "\n", {"order_agreement": agreement}
+
+
+def render_pages(path: Path, out_dir: Path, dpi: int = 150) -> list[Path]:
+    """Page images of a scanned PDF, for transcription (one JPEG per page)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _poppler("pdftoppm", "-r", str(dpi), "-jpeg", str(path), str(out_dir / path.stem))
+    return sorted(out_dir.glob(f"{path.stem}-*.jpg"))
