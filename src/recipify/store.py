@@ -4,13 +4,16 @@ Layout of the data directory::
 
     inventory.json                      stage 1: every source file, hashed and classified
     extractions/<sha256>/<engine>@v<N>.json   stage 2: text per document and extractor version
-    recipes/<sha256>/<engine>@v<N>.json       stage 3: structured recipe per structurer version
+    splits/<sha256>/<extraction>/<engine>@v<N>.json
+                                        stage 2b: one recipe or several, per text and splitter
+    recipes/<unit sha256>/<engine>@v<N>.json  stage 3: structured recipe, keyed by its input text
     catalog.json, report.md             stage 4: assessed recipes and the human-readable summary
     history/<time>.json                 every catalog run's tier per document (progress over time)
     runs.jsonl                          append-only log of every stage run
 
-Artifacts are keyed by the source's content hash, so duplicates share work, renamed files
-keep their results, and a new engine version writes a new file next to the old one.
+Artifacts are keyed by content hash, so duplicates share work, renamed files keep their
+results, and a new engine version writes a new file next to the old one: nothing is
+overwritten, and every recipe can be traced back to its source file (`recipify trace`).
 """
 
 import json
@@ -22,7 +25,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from recipify.models import Catalog, Extraction, Inventory, Structured
+from recipify.models import Catalog, Extraction, Inventory, Split, Structured
 
 
 def write_json(path: Path, data: BaseModel | dict[str, Any]) -> None:
@@ -70,8 +73,21 @@ class Workspace:
     def extraction_path(self, sha256: str, engine: str, version: int) -> Path:
         return self.data / "extractions" / sha256 / f"{engine}@v{version}.json"
 
-    def structured_path(self, sha256: str, engine: str, version: int) -> Path:
-        return self.data / "recipes" / sha256 / f"{engine}@v{version}.json"
+    def split_path(self, sha256: str, extraction: str, engine: str, version: int) -> Path:
+        return self.data / "splits" / sha256 / extraction / f"{engine}@v{version}.json"
+
+    def structured_path(self, input_sha256: str, engine: str, version: int) -> Path:
+        return self.data / "recipes" / input_sha256 / f"{engine}@v{version}.json"
+
+    def load_split(self, path: Path) -> Split | None:
+        if not path.is_file():
+            return None
+        return Split.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def load_structured(self, path: Path) -> Structured | None:
+        if not path.is_file():
+            return None
+        return Structured.model_validate_json(path.read_text(encoding="utf-8"))
 
     def extractions(self, sha256: str) -> Iterator[Extraction]:
         """All stored extractions of a document, newest first."""
@@ -80,13 +96,6 @@ class Workspace:
             for p in (self.data / "extractions" / sha256).glob("*.json")
         ]
         yield from sorted(found, key=lambda e: e.created_at, reverse=True)
-
-    def structured(self, sha256: str) -> Iterator[Structured]:
-        found = [
-            Structured.model_validate_json(p.read_text(encoding="utf-8"))
-            for p in (self.data / "recipes" / sha256).glob("*.json")
-        ]
-        yield from sorted(found, key=lambda s: s.created_at, reverse=True)
 
     def latest_snapshot(self) -> dict[str, str]:
         """Tier per source from the previous catalog run (empty on the first run)."""

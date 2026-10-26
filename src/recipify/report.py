@@ -20,18 +20,26 @@ def reason_group(reason: str) -> str:
 
 
 def tier_table(catalog: Catalog, inv: Inventory) -> list[tuple[str, int, int, int, int, int]]:
-    """Per category: files, unique documents, ready, review, excluded."""
+    """Per category: files, unique documents, and recipes ready, in review and excluded."""
     files = Counter(f.category for f in inv.files.values())
+    documents: dict[Category, set[str]] = defaultdict(set)
     by_cat: dict[Category, Counter[Tier]] = defaultdict(Counter)
     for e in catalog.entries:
+        documents[e.category].add(e.source)
         by_cat[e.category][e.assessment.tier] += 1
     rows = []
     for cat in Category:
         if files[cat]:
             t = by_cat[cat]
-            unique = sum(t.values())
             rows.append(
-                (cat.value, files[cat], unique, t[Tier.READY], t[Tier.REVIEW], t[Tier.EXCLUDED])
+                (
+                    cat.value,
+                    files[cat],
+                    len(documents[cat]),
+                    t[Tier.READY],
+                    t[Tier.REVIEW],
+                    t[Tier.EXCLUDED],
+                )
             )
     return rows
 
@@ -44,13 +52,24 @@ def render_report(
         "# Pipeline report",
         "",
         f"Built {catalog.created_at}. {len(inv.files)} source files, "
-        f"{len(catalog.entries)} unique documents, **{len(ready)} recipes ready** "
-        "(verified word for word against their source).",
+        f"{len({e.source for e in catalog.entries})} unique documents, "
+        f"**{len(ready)} recipes ready** (verified word for word against their source).",
         "",
-        "| Category | Files | Unique | Ready | Review | Excluded |",
+        "Ready, Review and Excluded count recipes: a split document counts once per recipe.",
+        "",
+        "| Category | Files | Documents | Ready | Review | Excluded |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     out += [f"| {r[0]} | " + " | ".join(map(str, r[1:])) + " |" for r in tier_table(catalog, inv)]
+
+    split: dict[str, list[str]] = defaultdict(list)
+    for e in sorted(catalog.entries, key=lambda e: (e.source, e.unit or 0)):
+        if e.unit is not None:
+            split[e.source].append(f"{e.unit}. {e.title} (p. {', '.join(map(str, e.unit_pages))})")
+    if split:
+        n = sum(map(len, split.values()))
+        out += ["", f"## Split documents: {len(split)} into {n} recipes", ""]
+        out += [f"- `{source}`: " + "; ".join(units) for source, units in split.items()]
 
     if changes:
         out += ["", f"## Changes since the last run: {len(changes)}", ""]

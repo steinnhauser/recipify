@@ -12,13 +12,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from recipify import inventory
+from recipify import split as split_stage
 from recipify.assess import assess
 from recipify.categories import Category
 from recipify.curation import Curation
 from recipify.extract import LOCAL
 from recipify.labels import detect_labels, refine_title
 from recipify.models import (
-    Assessment,
     Catalog,
     Entry,
     Extraction,
@@ -26,6 +26,7 @@ from recipify.models import (
     Kind,
     Recipe,
     SourceFile,
+    Split,
     Structured,
     Tier,
     now_iso,
@@ -169,6 +170,48 @@ def _label(e: Extraction) -> str:
     return f"{e.engine}@v{e.version}"
 
 
+def current_split(ws: Workspace, f: SourceFile, extraction: Extraction) -> Split | None:
+    path = ws.split_path(f.sha256, _label(extraction), split_stage.ENGINE, split_stage.VERSION)
+    return ws.load_split(path)
+
+
+def run_split(
+    ws: Workspace,
+    inv: Inventory,
+    curation: Curation,
+    force: bool = False,
+    on_result: OnResult | None = None,
+) -> StageResult:
+    """Stage 2b: decide, for every document, whether it holds one recipe or several."""
+    started, result = time.time(), StageResult()
+    for f in recipe_files(inv):
+        extraction = best_extraction(ws, f)
+        if extraction is None:
+            continue
+        stem = Path(f.path).stem
+        keep_whole = stem in curation.keep_whole
+        previous = current_split(ws, f, extraction)
+        if previous and previous.by_hand == keep_whole and not force:
+            result.skipped += 1
+            continue
+        decision = split_stage.split(
+            f.sha256, _label(extraction), extraction.text, stem, keep_whole
+        )
+        path = ws.split_path(f.sha256, _label(extraction), decision.engine, decision.version)
+        write_json(path, decision)
+        result.done += 1
+        if on_result:
+            on_result(f.path, f"{decision.decision}: {len(decision.units)} recipe(s)")
+    _log(
+        ws,
+        "split",
+        started,
+        engine=f"{split_stage.ENGINE}@v{split_stage.VERSION}",
+        **result.as_dict(),
+    )
+    return result
+
+
 def run_structure(
     ws: Workspace,
     inv: Inventory,
@@ -176,58 +219,46 @@ def run_structure(
     force: bool = False,
     on_result: OnResult | None = None,
 ) -> StageResult:
+    """Stage 3: one structured recipe per unit, keyed by the hash of the unit's text."""
     started, result = time.time(), StageResult()
     for f in recipe_files(inv):
         extraction = best_extraction(ws, f)
-        if extraction is None:
+        decision = current_split(ws, f, extraction) if extraction else None
+        if extraction is None or decision is None:
             continue
-        target = ws.structured_path(f.sha256, rules.ENGINE, rules.VERSION)
-        if target.exists() and not force:
-            previous = Structured.model_validate_json(target.read_text(encoding="utf-8"))
-            if previous.extraction == _label(extraction):
+        for unit in decision.units:
+            target = ws.structured_path(unit.sha256, rules.ENGINE, rules.VERSION)
+            if target.exists() and not force:
                 result.skipped += 1
                 continue
-        if limit is not None and result.done + result.failed >= limit:
-            break
-        try:
-            structured = Structured(
-                sha256=f.sha256,
-                engine=rules.ENGINE,
-                version=rules.VERSION,
-                extraction=_label(extraction),
-                recipe=rules.structure(extraction.text, Path(f.path).stem),
-            )
-            write_json(target, structured)
-            result.done += 1
-            status = "ok"
-        except Exception as exc:  # one bad file must not stop a long run
-            result.failed += 1
-            status = f"{type(exc).__name__}: {exc}"
-            result.errors.append((f.path, status))
-        if on_result:
-            on_result(f.path, status)
+            if limit is not None and result.done + result.failed >= limit:
+                break
+            name = f"{f.path}#{unit.index}" if len(decision.units) > 1 else f.path
+            try:
+                structured = Structured(
+                    sha256=f.sha256,
+                    engine=rules.ENGINE,
+                    version=rules.VERSION,
+                    extraction=_label(extraction),
+                    split=decision.label,
+                    unit=unit.index,
+                    input_sha256=unit.sha256,
+                    recipe=rules.structure(unit.text, Path(f.path).stem),
+                )
+                write_json(target, structured)
+                result.done += 1
+                status = "ok"
+            except Exception as exc:  # one bad file must not stop a long run
+                result.failed += 1
+                status = f"{type(exc).__name__}: {exc}"
+                result.errors.append((name, status))
+            if on_result:
+                on_result(name, status)
     _log(ws, "structure", started, engine=f"{rules.ENGINE}@v{rules.VERSION}", **result.as_dict())
     return result
 
 
 # --- stage 4 ----------------------------------------------------------------------------
-
-
-def _choose(
-    ws: Workspace, f: SourceFile, extraction: Extraction | None
-) -> tuple[Structured | None, Assessment]:
-    """Assess every structuring of the current text (one per structurer version) and keep
-    the most trustworthy one."""
-    if extraction is None:
-        return None, assess(f, None, None)
-    candidates = [
-        (s, assess(f, extraction, s))
-        for s in ws.structured(f.sha256)
-        if s.extraction == _label(extraction)
-    ]
-    if not candidates:
-        return None, assess(f, extraction, None)
-    return min(candidates, key=lambda c: (TIER_RANK[c[1].tier], len(c[1].reasons), -c[0].version))
 
 
 def _words(entry: Entry) -> Counter[str]:
@@ -271,14 +302,24 @@ def _distinct_titles(entries: list[Entry], curation: Curation) -> None:
     for group in groups.values():
         if len(group) < 2:
             continue
+        hints: dict[str, list[str]] = {e.ref: [] for e in group}
+        base = {e.ref: e.title for e in group}
+
+        def title(e: Entry) -> str:
+            return f"{base[e.ref]} ({', '.join(hints[e.ref])})" if hints[e.ref] else base[e.ref]
+
         for hint in (_file_hint, _folder_hint):
-            clashing = [e for e in group if sum(fold(o.title) == fold(e.title) for o in group) > 1]
+            clashing = [e for e in group if sum(title(o) == title(e) for o in group) > 1]
             for e in clashing:
                 h = hint(e)
-                if Path(e.source).stem in curation.titles or fold(h) in fold(e.title):
+                if Path(e.source).stem in curation.titles or fold(h) in fold(title(e)):
                     continue
-                # 'Aðalbláber & rjómi (tasting).pdf' is just a more specific title
-                e.title = h if fold(h).startswith(fold(e.title)) else f"{e.title} ({h})"
+                if not hints[e.ref] and fold(h).startswith(fold(base[e.ref])):
+                    base[e.ref] = h  # 'Aðalbláber & rjómi (tasting).pdf': a more specific title
+                else:
+                    hints[e.ref].append(h)
+        for e in group:
+            e.title = title(e)
 
 
 def _file_hint(e: Entry) -> str:
@@ -289,6 +330,58 @@ def _folder_hint(e: Entry) -> str:
     return Path(e.source).parent.name or "top folder"
 
 
+def _entries(ws: Workspace, f: SourceFile, copies: list[str], curation: Curation) -> list[Entry]:
+    """One catalog entry per recipe in the document (one, unless it was split)."""
+    stem = Path(f.path).stem
+    extraction = best_extraction(ws, f) if f.kind == Kind.RECIPE else None
+    decision = current_split(ws, f, extraction) if extraction else None
+    base = Entry(
+        id=f.sha256[:12],
+        source=f.path,
+        category=f.category,
+        kind=f.kind,
+        pages=f.pages,
+        duplicates=copies,
+        assessment=assess(f, extraction, None),
+        title=stem,
+    )
+    if extraction is None or decision is None:
+        return [_curated(base, stem, curation)]
+    entries = []
+    several = len(decision.units) > 1
+    for unit in decision.units:
+        path = ws.structured_path(unit.sha256, rules.ENGINE, rules.VERSION)
+        structured = ws.load_structured(path)
+        entry = base.model_copy(deep=True)
+        entry.extraction, entry.split = _label(extraction), decision.label
+        entry.unit_pages = unit.pages
+        if several:
+            entry.id, entry.unit, entry.units = (
+                f"{base.id}-{unit.index}",
+                unit.index,
+                len(decision.units),
+            )
+        entry.assessment = assess(f, extraction, structured, unit.text)
+        if structured:
+            recipe = structured.recipe
+            entry.structure = f"{structured.engine}@v{structured.version}"
+            entry.title = refine_title(
+                recipe.title, recipe, "" if several else stem, curation.titles
+            )
+            hints = "\n".join([f.path, *copies])  # copies in other folders add hints
+            entry.labels = detect_labels(entry.title, hints, recipe) | curation.labels.get(stem, {})
+            entry.recipe = recipe
+        entries.append(_curated(entry, stem, curation))
+    return entries
+
+
+def _curated(entry: Entry, stem: str, curation: Curation) -> Entry:
+    if stem in curation.tier and entry.assessment.tier != Tier.EXCLUDED:
+        entry.assessment.tier = curation.tier[stem]
+        entry.assessment.reasons.append("tier set by hand in curation.json")
+    return entry
+
+
 def build_catalog(ws: Workspace, inv: Inventory, curation: Curation) -> Catalog:
     started = time.time()
     copies: dict[str, list[str]] = {}
@@ -297,36 +390,12 @@ def build_catalog(ws: Workspace, inv: Inventory, curation: Curation) -> Catalog:
             copies.setdefault(f.duplicate_of, []).append(f.path)
     entries = []
     for f in inv.canonical():
-        stem = Path(f.path).stem
-        extraction = best_extraction(ws, f) if f.kind == Kind.RECIPE else None
-        structured, assessment = _choose(ws, f, extraction)
-        if stem in curation.tier and assessment.tier != Tier.EXCLUDED:
-            assessment.tier = curation.tier[stem]
-            assessment.reasons.append("tier set by hand in curation.json")
-        entry = Entry(
-            id=f.sha256[:12],
-            source=f.path,
-            category=f.category,
-            kind=f.kind,
-            pages=f.pages,
-            duplicates=sorted(copies.get(f.path, [])),
-            assessment=assessment,
-            title=stem,
-        )
-        if structured and extraction:
-            recipe = structured.recipe
-            entry.extraction = _label(extraction)
-            entry.structure = f"{structured.engine}@v{structured.version}"
-            entry.title = refine_title(recipe.title, recipe, stem, curation.titles)
-            paths = "\n".join([f.path, *entry.duplicates])  # copies in other folders add hints
-            entry.labels = detect_labels(entry.title, paths, recipe) | curation.labels.get(stem, {})
-            entry.recipe = recipe
-        entries.append(entry)
+        entries += _entries(ws, f, sorted(copies.get(f.path, [])), curation)
     _merge_twins(entries)
     _distinct_titles(entries, curation)
     entries.sort(key=lambda e: (TIER_RANK[e.assessment.tier], e.title.casefold()))
     catalog = Catalog(entries=entries)
-    tiers = {e.source: e.assessment.tier.value for e in entries}
+    tiers = {e.ref: e.assessment.tier.value for e in entries}
     previous = ws.latest_snapshot()
     changes = sorted(
         (source, previous.get(source, "new"), tier)

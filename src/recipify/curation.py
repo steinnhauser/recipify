@@ -5,7 +5,8 @@ Keys are source file stems (the file name without extension)::
     {"titles": {"IMG_0042": "Recipe notebook I"},
      "labels": {"desserts": {"course": ["dessert"]}},
      "kind": {"Missi": "reference"},
-     "tier": {"Pylsubrauð": "review"}}
+     "tier": {"Pylsubrauð": "review"},
+     "keep_whole": ["Sósur og soð"]}
 """
 
 from pathlib import Path
@@ -20,6 +21,7 @@ class Curation(BaseModel):
     labels: dict[str, dict[str, list[str]]] = {}
     kind: dict[str, Kind] = {}
     tier: dict[str, Tier] = {}  # force a tier after review (e.g. keep a recipe out)
+    keep_whole: list[str] = []  # documents the split stage must not split
 
     @classmethod
     def load(cls, path: Path) -> "Curation":

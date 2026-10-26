@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- **Split stage.** Documents that hold several recipes are split into one recipe per unit at their page breaks, in clear cases only. The document must be named as a collection, each recipe must start on a titled page, the parts must be recipes rather than fragments, and no two may be translations of each other. 10 documents become 106 recipes, and 439 recipes are now ready (up from 380). Every decision is stored with its reason, and `keep_whole` in `curation.json` overrides it.
+- **Traceability.** Structured recipes are stored by the hash of their input text. Recipe IDs carry the unit number, and `recipify trace` follows a recipe back to its source file, re-checking every hash. The viewer names the page a recipe came from.
+- Word extraction keeps explicit page breaks (`python-docx@v3`), and the report counts documents and recipes separately.
+
 ## 0.3.0
 
 recipify is now a staged pipeline that verifies every recipe it publishes.

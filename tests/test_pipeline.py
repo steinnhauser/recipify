@@ -55,9 +55,13 @@ def test_inventory_triage_and_duplicates(ws: Workspace):
 
 
 def test_triage():
-    assert triage("Myndir/Eftirréttir/Kaka.jpg", Category.IMAGE_FILES, None, Curation()) == Kind.PHOTO
+    assert (
+        triage("Myndir/Eftirréttir/Kaka.jpg", Category.IMAGE_FILES, None, Curation()) == Kind.PHOTO
+    )
     assert triage("Advanced Pastry 3.jpeg", Category.IMAGE_FILES, None, Curation()) == Kind.RECIPE
-    assert triage("Missi morgunvakt.xlsx", Category.SPREADSHEETS, None, Curation()) == Kind.REFERENCE
+    assert (
+        triage("Missi morgunvakt.xlsx", Category.SPREADSHEETS, None, Curation()) == Kind.REFERENCE
+    )
     assert triage("Hópaseðill.pdf", Category.READABLE_PDFS, 1, Curation()) == Kind.REFERENCE
     assert triage("Bók.epub", Category.EPUB_BOOKS, None, Curation()) == Kind.BOOK
     assert triage("Kaka.pdf", Category.READABLE_PDFS, 2, Curation()) == Kind.RECIPE
@@ -72,6 +76,7 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert pipeline.run_extract(ws, inv).skipped == 2
     assert pipeline.run_extract(ws, inv, force=True, limit=1).done == 1
 
+    pipeline.run_split(ws, inv, Curation())
     st = pipeline.run_structure(ws, inv, on_result=lambda p, s: None)
     assert st.done == 2
     assert pipeline.run_structure(ws, inv).skipped == 2
@@ -94,6 +99,7 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert "**1 recipes ready**" in report and "## Review list" in report
     assert "Changes since the last run" not in report  # the first run has nothing to compare
     pipeline.register(ws, inv.files["photo.jpg"], "Rauðrófur\n4 rauðrófur", "vision")
+    pipeline.run_split(ws, inv, Curation())
     pipeline.run_structure(ws, inv)
     pipeline.build_catalog(ws, inv, Curation())
     assert "- `photo.jpg`: excluded -> review" in ws.report_path.read_text()
@@ -129,6 +135,7 @@ def test_transcriptions_are_never_overwritten(ws: Workspace):
     assert (first.name, second.name) == ("vision@v1.json", "vision@v2.json")
     assert pipeline.best_extraction(ws, photo).version == 2
     assert pipeline.run_extract(ws, inv, force=True).done == 2  # the photo has no local engine
+    pipeline.run_split(ws, inv, Curation())
     pipeline.run_structure(ws, inv)
     catalog = pipeline.build_catalog(ws, inv, Curation())
     photo_entry = next(e for e in catalog.entries if e.source == "photo.jpg")
@@ -139,6 +146,7 @@ def test_transcriptions_are_never_overwritten(ws: Workspace):
 def test_structure_failures(ws: Workspace, monkeypatch: pytest.MonkeyPatch):
     inv = pipeline.run_inventory(ws, Curation())
     pipeline.run_extract(ws, inv)
+    pipeline.run_split(ws, inv, Curation())
 
     def broken(text: str, title: str):
         raise RuntimeError("parser bug")
@@ -172,10 +180,15 @@ def test_twins_titles_and_curated_tiers(tmp_path: Path, make_pdf, make_docx):
         sources / "Graflax (hópar).pdf",
         ["Graflax\n9 kg lax\n9 g salt\nAðferð:\nFyrir hópa.\n" + steps],
     )
+    make_pdf(
+        sources / "Graflax 2019.pdf",
+        ["Graflax\n4 kg lax\n80 g dill\nAðferð:\nGrafið 2019.\n" + steps],
+    )
     make_pdf(sources / "Hidden.pdf", ["Hidden\n1 kg lax\n9 g salt\nAðferð:\nHidden.\n" + steps])
     ws = Workspace(sources, tmp_path / "data")
     inv = pipeline.run_inventory(ws, Curation())
     pipeline.run_extract(ws, inv)
+    pipeline.run_split(ws, inv, Curation())
     pipeline.run_structure(ws, inv)
     curation = Curation(tier={"Hidden": Tier.REVIEW}, titles={"Graflax (hópar)": "Graflax"})
     catalog = pipeline.build_catalog(ws, inv, curation)
@@ -185,6 +198,7 @@ def test_twins_titles_and_curated_tiers(tmp_path: Path, make_pdf, make_docx):
         "Spa/Graflax.pdf": "Graflax (Spa)",
         "Bistro/Graflax.pdf": "Graflax (Bistro)",
         "Graflax (hópar).pdf": "Graflax",
+        "Graflax 2019.pdf": "Graflax 2019",  # the file name is just a more specific title
     }
     twin = next(e for e in catalog.entries if e.source == "Graflax.pdf")
     assert twin.assessment.reasons == ["same recipe as Graflax.docx"]
@@ -328,3 +342,76 @@ def test_store_helpers(tmp_path: Path):
     assert Curation.load(tmp_path / "missing.json") == Curation()
     (tmp_path / "c.json").write_text('{"kind": {"Missi": "reference"}}', encoding="utf-8")
     assert Curation.load(tmp_path / "c.json").kind == {"Missi": Kind.REFERENCE}
+
+
+CAKES = (
+    "Gulrótarkaka\n300 g hveiti\n250 g sykur\n3 egg\nAðferð:\n"
+    "Allt hrært saman og bakað við 175°C í 40 mín. Kælt áður en kremið fer á.",
+    "Hjónabandssæla\n200 g hafrar\n200 g hveiti\n150 g púðursykur\nAðferð:\n"
+    "Allt hnoðað saman, sultan smurð yfir og bakað við 180°C í 30 mín. Borið fram volgt.",
+)
+
+
+def test_split_documents_are_traceable(tmp_path: Path, make_pdf):
+    from recipify.trace import trace
+
+    sources = tmp_path / "src"
+    make_pdf(sources / "Kökur - uppskriftir.pdf", list(CAKES))
+    ws = Workspace(sources, tmp_path / "data")
+    inv = pipeline.run_inventory(ws, Curation())
+    pipeline.run_extract(ws, inv)
+    seen: list[str] = []
+    assert pipeline.run_split(ws, inv, Curation(), on_result=lambda p, s: seen.append(s)).done == 1
+    assert seen == ["split: 2 recipe(s)"]
+    assert pipeline.run_split(ws, inv, Curation()).skipped == 1
+    structured = pipeline.run_structure(ws, inv, on_result=lambda p, s: seen.append(p))
+    assert structured.done == 2 and seen[1:] == [
+        "Kökur - uppskriftir.pdf#1",
+        "Kökur - uppskriftir.pdf#2",
+    ]
+    assert pipeline.run_structure(ws, inv, limit=0, force=True).done == 0
+    catalog = pipeline.build_catalog(ws, inv, Curation())
+    cake, pie = sorted(catalog.entries, key=lambda e: e.unit or 0)
+    assert (cake.unit, cake.units, cake.unit_pages, cake.ref) == (
+        1,
+        2,
+        [1],
+        "Kökur - uppskriftir.pdf#1",
+    )
+    assert cake.id == inv.files["Kökur - uppskriftir.pdf"].sha256[:12] + "-1"
+    assert cake.assessment.tier == pie.assessment.tier == Tier.READY
+    assert "## Split documents: 1 into 2 recipes" in ws.report_path.read_text()
+
+    links = trace(ws, inv, pie)
+    assert [link.stage for link in links] == [
+        "recipe", "structured", "unit", "split", "extraction", "source"
+    ]  # fmt: skip
+    assert all(link.ok in (True, None) for link in links)
+    assert "recipe 2 of 2, page(s) 2" in links[2].detail
+
+    # tampering anywhere in the chain shows up
+    path = links[1].path
+    assert path is not None
+    path.write_text(path.read_text().replace("Hjónabandssæla", "Hjónabandssæla!"))
+    assert trace(ws, inv, pie)[1].ok is False
+
+    # a decision by hand: keep the document whole (recorded, and re-decided automatically)
+    kept = pipeline.run_split(ws, inv, Curation(keep_whole=["Kökur - uppskriftir"]))
+    assert kept.done == 1
+    pipeline.run_structure(ws, inv)
+    catalog = pipeline.build_catalog(ws, inv, Curation(keep_whole=["Kökur - uppskriftir"]))
+    assert [e.unit for e in catalog.entries] == [None]
+    assert "#1`: ready -> " not in ws.report_path.read_text()  # refs changed, both listed
+    whole = catalog.entries[0]
+    assert [link.stage for link in trace(ws, inv, whole)][2:4] == ["unit", "split"]
+
+
+def test_trace_of_a_document_without_text(ws: Workspace):
+    from recipify.trace import trace
+
+    inv = pipeline.run_inventory(ws, Curation())
+    catalog = pipeline.build_catalog(ws, inv, Curation())
+    photo = next(e for e in catalog.entries if e.source == "photo.jpg")
+    links = trace(ws, inv, photo)
+    assert [link.stage for link in links] == ["recipe", "source", "source"]
+    assert links[-1].ok is True

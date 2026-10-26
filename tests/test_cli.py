@@ -33,6 +33,8 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ws) -> Path:
 def test_stage_by_stage(workdir: Path):
     assert "5 files, 4 unique" in invoke("inventory")
     assert "2 extracted" in invoke("extract")
+    assert "2 decided" in invoke("split")
+    assert "2 cached" in invoke("split")
     assert "2 structured" in invoke("structure")
     out = invoke("catalog")
     assert "readable_pdfs" in out and "book (1)" in out
@@ -40,6 +42,8 @@ def test_stage_by_stage(workdir: Path):
     assert "tier: ready" in out and '"title": "Tartdeig"' in out
     assert "tier: excluded" in invoke("show", "Handbook.pdf")
     assert "not in the catalog" in fails("show", "nope.pdf")
+    out = invoke("trace", "Bakarí/Tartdeig.pdf")
+    assert "✓ source" in out and "pages@v1: whole: one page" in out
     assert "1 recipes" in invoke("build", "--out", "out/index.html")
     assert (workdir / "out/index.html").is_file()
 
@@ -88,7 +92,8 @@ def test_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     shutil.copytree(EXAMPLES, tmp_path / "examples/sources")
     out = invoke("demo", "--report", "site/report.md")
     assert "Wrote site/demo/index.html" in out
-    assert "13 recipes ready" in (tmp_path / "site/report.md").read_text()
+    report = (tmp_path / "site/report.md").read_text()
+    assert "15 recipes ready" in report and "Split documents: 1 into 2 recipes" in report
 
 
 def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -109,3 +114,12 @@ def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert "opens with ENCRYPTION_KEY" in invoke("lock", "--verify")
     monkeypatch.setenv("ENCRYPTION_KEY", "other")
     assert "does not open" in fails("lock", "--verify")
+
+
+def test_ambiguous_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    shutil.copytree(EXAMPLES / "Bakery", tmp_path / "recipes")
+    invoke("run")
+    out = fails("trace", "Kökur - uppskriftir.pdf")
+    assert "holds 2 recipes" in out and "Kökur - uppskriftir.pdf#2" in out
+    assert "✓ unit" in invoke("trace", "Kökur - uppskriftir.pdf#2")

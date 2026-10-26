@@ -39,7 +39,7 @@
 *.rar
 # Plain (unencrypted) viewer pages anywhere; templates and the encrypted site are allowed
 *.html
-!/src/recipify/*_template.html
+!/src/recipify/templates/*.html
 !/site/*.html
 # README screenshots and the sample documents (fictional recipes written for this project)
 !/docs/*.png

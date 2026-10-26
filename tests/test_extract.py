@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from docx import Document
+from docx.enum.text import WD_BREAK
 from docx.oxml import parse_xml
 from openpyxl import Workbook
 
@@ -135,11 +136,14 @@ def test_docx_extraction(tmp_path: Path):
     layout.cell(0, 0).text = "200 g skyr\n100 g rjómi"
     layout.cell(0, 1).text = "Method"
     doc.add_table(rows=1, cols=1)  # empty tables are dropped
+    doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)  # a page break of its own
+    after = doc.add_paragraph("Next page", style="List Bullet")
+    after.paragraph_format.page_break_before = True
     doc.save(str(tmp_path / "soup.docx"))
     assert extract_docx(tmp_path / "soup.docx") == (
         "# Kjötsúpa\n\n## Súpan\n\n# Odd heading\n\n- Lamb\n\nAnchor text\n\nHumarsósa\n\n"
         "5 stk laukur\n2 l rjómi\n\nIn a content control\n\nMerged\n600 g | cod\n\n"
-        "200 g skyr\n100 g rjómi\n\nMethod\n"
+        "200 g skyr\n100 g rjómi\n\nMethod\n\n\f\n\n\f\n- Next page\n"
     )
 
 

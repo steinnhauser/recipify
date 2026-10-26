@@ -85,6 +85,9 @@ def recipe_html(e: Entry) -> str:
 def source_line(e: Entry) -> str:
     kind = SOURCE_KIND.get(e.category, "document")
     pages = f", {e.pages} page{'s' * (e.pages != 1)}" if e.pages else ""
+    if e.unit is not None:
+        where = ", ".join(map(str, e.unit_pages))
+        pages = f", page{'s' * (len(e.unit_pages) > 1)} {where}; recipe {e.unit} of {e.units}"
     return (
         f"From {esc(Path(e.source).name)} ({kind}{pages}). Every word and number was checked "
         "against the original."

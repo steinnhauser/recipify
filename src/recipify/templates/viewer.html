@@ -251,7 +251,7 @@ const closeFaq = () => $('faq').close ? $('faq').close() : $('faq').removeAttrib
 $('faq-x').onclick = closeFaq;
 $('faq').onclick = e => { if (e.target === $('faq')) closeFaq(); };
 renderList();
-const h = location.hash.match(/^#r([0-9a-f]+)$/); if (h) show(h[1]);
+const h = location.hash.match(/^#r([0-9a-f]+(?:-\d+)?)$/); if (h) show(h[1]);
 document.getElementById('static').remove();
 } catch (e) {  // never leave a blank page: fall back to the simple view
   document.documentElement.className = 'nojs'; console.error(e);

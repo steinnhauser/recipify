@@ -162,6 +162,8 @@ def main() -> None:
     md = {p.stem: parse(p) for p in sorted(RECIPES.rglob("*.md"))}
     write_docx(OUT / "Bakery/Kleinur.docx", [md["kleinur"]])
     pdf_from([md["ponnukokur"]], OUT / "Breakfast/Pönnukökur.pdf")
+    cakes = [md["gulrotarkaka"], md["hjonabandssaela"]]  # a collection: one recipe per page
+    pdf_from(cakes, OUT / "Bakery/Kökur - uppskriftir.pdf")
     write_docx(OUT / "Drinks/Rhubarb cordial.docx", [md["rhubarb-cordial"]])
     write_docx(OUT / "Restaurant/Sauces/Béarnaise.docx", [md["bearnaise"]])
     write_docx(
@@ -185,7 +187,8 @@ def main() -> None:
         to_png(
             pdf_from([md["beetroot-salad"]], Path(tmp) / "b.pdf"), OUT / "Scans/Beetroot salad.png"
         )
-    pdf_from(list(md.values()), OUT / "Kitchen handbook 2019.pdf")  # a book: one page per recipe
+    book = [r for stem, r in md.items() if stem not in ("gulrotarkaka", "hjonabandssaela")]
+    pdf_from(book, OUT / "Kitchen handbook 2019.pdf")  # a book: one page per recipe
     doc = Document()
     doc.add_heading("Missi listi – morgunvakt", level=1)
     for line in ["Skera lauk og gulrætur", "Þeyta rjóma", "Fylla á krydd", "Merkja og dagsetja"]:

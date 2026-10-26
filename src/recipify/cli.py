@@ -15,9 +15,10 @@ from rich.table import Table
 
 from recipify import lock as locking
 from recipify import pipeline, viewer
+from recipify import trace as tracing
 from recipify.curation import Curation
 from recipify.extract.pdf import render_pages
-from recipify.models import Catalog, Inventory, Tier
+from recipify.models import Catalog, Entry, Inventory, Tier
 from recipify.report import reason_group, tier_table
 from recipify.store import Workspace
 
@@ -61,7 +62,7 @@ def _inventory(ws: Workspace) -> Inventory:
 
 
 def _print_summary(catalog: Catalog, inv: Inventory) -> None:
-    table = Table("Category", "Files", "Unique", "Ready", "Review", "Excluded")
+    table = Table("Category", "Files", "Documents", "Ready", "Review", "Excluded")
     for row in tier_table(catalog, inv):
         table.add_row(*map(str, row))
     console.print(table)
@@ -98,6 +99,17 @@ def extract(
     ws = _ws(ctx)
     result = pipeline.run_extract(ws, _inventory(ws), limit, force, on_result=_report)
     console.print(f"{result.done} extracted, {result.skipped} cached, {result.failed} failed")
+
+
+@app.command()
+def split(
+    ctx: typer.Context,
+    force: Annotated[bool, typer.Option(help="Decide again for documents decided before.")] = False,
+) -> None:
+    """Stage 2b: split documents that hold several recipes (clear cases only)."""
+    ws = _ws(ctx)
+    result = pipeline.run_split(ws, ws.load_inventory(), _curation(ws), force, _report)
+    console.print(f"{result.done} decided, {result.skipped} cached")
 
 
 @app.command()
@@ -172,37 +184,67 @@ def run(
     ctx: typer.Context,
     force: Annotated[bool, typer.Option(help="Redo local results that exist.")] = False,
 ) -> None:
-    """Run every free stage: inventory, extract, structure (rules) and catalog."""
+    """Run every stage: inventory, extract, split, structure and catalog."""
     ws = _ws(ctx)
     inv = _inventory(ws)
+    curation = _curation(ws)
     with console.status("Extracting text..."):
         ex = pipeline.run_extract(ws, inv, force=force)
+    with console.status("Splitting documents..."):
+        sp = pipeline.run_split(ws, inv, curation, force=force)
     with console.status("Structuring recipes..."):
         st = pipeline.run_structure(ws, inv, force=force)
     console.print(
         f"extract: {ex.done} new, {ex.skipped} cached, {ex.failed} failed · "
+        f"split: {sp.done} new, {sp.skipped} cached · "
         f"structure: {st.done} new, {st.skipped} cached, {st.failed} failed"
     )
     for path, error in ex.errors + st.errors:
         console.print(f"[red]failed[/red] {path}: {error}", highlight=False)
-    _print_summary(pipeline.build_catalog(ws, inv, _curation(ws)), inv)
+    _print_summary(pipeline.build_catalog(ws, inv, curation), inv)
     console.print(f"Report: {ws.report_path}")
+
+
+def _entry(ctx: typer.Context, ref: str) -> Entry:
+    entries = _ws(ctx).load_catalog().entries
+    found = [e for e in entries if ref in (e.id, e.ref)] or [e for e in entries if e.source == ref]
+    if not found:
+        raise typer.BadParameter(f"{ref} is not in the catalog")
+    if len(found) > 1:
+        refs = ", ".join(e.ref for e in found)
+        raise typer.BadParameter(f"{ref} holds {len(found)} recipes; pick one of: {refs}")
+    return found[0]
+
+
+@app.command()
+def trace(
+    ctx: typer.Context,
+    ref: Annotated[str, typer.Argument(help="Catalog id, source path, or source#recipe.")],
+) -> None:
+    """Follow a recipe back to its source file, checking every artifact on the way."""
+    ws = _ws(ctx)
+    marks = {True: "[green]✓[/green]", False: "[red]✗ mismatch[/red]", None: " "}
+    for link in tracing.trace(ws, ws.load_inventory(), _entry(ctx, ref)):
+        console.print(
+            f"{marks[link.ok]} [bold]{link.stage:<10}[/bold] {link.detail}", highlight=False
+        )
+        if link.path:
+            console.print(f"             {link.path}", highlight=False, style="dim")
 
 
 @app.command()
 def show(
     ctx: typer.Context,
-    source: Annotated[str, typer.Argument(help="Source path or catalog id.")],
+    source: Annotated[str, typer.Argument(help="Catalog id, source path, or source#recipe.")],
 ) -> None:
-    """Print one document's assessment, extracted text and structured recipe."""
-    entries = _ws(ctx).load_catalog().entries
-    entry = next((e for e in entries if source in (e.source, e.id)), None)
-    if entry is None:
-        raise typer.BadParameter(f"{source} is not in the catalog")
+    """Print one recipe's assessment and structured content."""
+    entry = _entry(ctx, source)
     a = entry.assessment
     console.print(f"[bold]{entry.title}[/bold]  ({entry.source})", highlight=False)
     console.print(f"tier: {a.tier.value}  {'; '.join(a.reasons)}", highlight=False)
-    console.print(f"engines: {entry.extraction} -> {entry.structure}", highlight=False)
+    console.print(
+        f"engines: {entry.extraction} -> {entry.split} -> {entry.structure}", highlight=False
+    )
     if entry.recipe:
         console.print_json(entry.recipe.model_dump_json(exclude_defaults=True))
 
@@ -235,6 +277,7 @@ def demo(
         ws = Workspace(source, Path(tmp))
         inv = pipeline.run_inventory(ws, Curation())
         pipeline.run_extract(ws, inv)
+        pipeline.run_split(ws, inv, Curation())
         pipeline.run_structure(ws, inv)
         result = pipeline.build_catalog(ws, inv, Curation())
         out.parent.mkdir(parents=True, exist_ok=True)

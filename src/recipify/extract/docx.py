@@ -6,6 +6,8 @@ merged table cells, so this walks the body directly:
 - text boxes are read where they are anchored; Word's legacy duplicate (``mc:Fallback``)
   is skipped, so their text appears once;
 - soft line breaks stay line breaks, so ingredient lists keep one ingredient per line;
+- explicit page breaks (not the ones Word adds while laying out text) become a form feed
+  line, so the split stage can see where the author started a new page;
 - headings become ``# ...`` and list items ``- ...``;
 - a table whose cells each hold one line is read row by row ("600 g | cod"); a layout
   table with whole paragraphs in its cells is read cell by cell.
@@ -18,7 +20,8 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from lxml.etree import _Element
 
-ENGINE, VERSION = "python-docx", 2
+ENGINE, VERSION = "python-docx", 3
+PAGE_BREAK = "\f"  # explicit page breaks become a line of their own, as between PDF pages
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
@@ -48,6 +51,8 @@ class _Reader:
                 boxes.append(child)
             elif tag == f"{W}t":
                 out.append(child.text or "")
+            elif tag == f"{W}br" and child.get(f"{W}type") == "page":
+                out.append(f"\n{PAGE_BREAK}\n")
             elif tag in (f"{W}br", f"{W}cr"):
                 out.append("\n")
             elif tag == f"{W}tab":
@@ -58,17 +63,22 @@ class _Reader:
     def _paragraph(self, p: _Element) -> Iterator[str]:
         parts: list[str] = []
         boxes: list[_Element] = []
+        if p.find(f"{W}pPr/{W}pageBreakBefore") is not None:
+            parts.append(f"{PAGE_BREAK}\n")
         self._runs(p, parts, boxes)
-        lines = [line.strip() for line in "".join(parts).split("\n")]
+        lines = [line.strip(" \t\r\n") for line in "".join(parts).split("\n")]
         lines = [line for line in lines if line]
-        if lines:
+        text = [i for i, line in enumerate(lines) if line != PAGE_BREAK]
+        if text:
             style = Paragraph(p, self.doc).style  # type: ignore[arg-type]  # p is a CT_P
             name = (style.name if style is not None else "") or ""
             if name.startswith("Heading") or name == "Title":
                 level = name.removeprefix("Heading").strip()
-                lines[0] = "#" * (int(level) if level.isdigit() else 1) + " " + lines[0]
+                first = text[0]
+                lines[first] = "#" * (int(level) if level.isdigit() else 1) + " " + lines[first]
             elif "List" in name or p.find(f"{W}pPr/{W}numPr") is not None:
-                lines = [f"- {line}" for line in lines]
+                lines = [line if line == PAGE_BREAK else f"- {line}" for line in lines]
+        if lines:
             yield "\n".join(lines)
         for box in boxes:
             yield from self.blocks(box)

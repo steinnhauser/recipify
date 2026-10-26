@@ -15,7 +15,8 @@ data/
   inventory.json                          every source file: sha256, category, kind, pages, copies
   extractions/<sha256>/poppler@v2.json    text per document and engine version
   extractions/<sha256>/vision@v1.json     a registered transcription of a scan
-  recipes/<sha256>/rules@v1.json          structured recipe per structurer version
+  splits/<sha256>/poppler@v2/pages@v1.json  split decision per extraction and splitter version
+  recipes/<unit sha256>/rules@v1.json     structured recipe, keyed by the hash of its input text
   catalog.json                            every unique document with its assessment
   report.md                               the human-readable summary and review list
   history/<time>.json                     every catalog run's tier per document (report.md lists the changes)
@@ -53,6 +54,22 @@ data/
 
 **Reading-order check.** Every line from the raw extraction must appear, whole, in the layout rendering of the same pages. On the real archive the two agree on every line for 349 of 356 short PDFs. The rest are PDFs whose text is stored in fragments. They go to review rather than risking a recipe with lines in the wrong order.
 
+## Stage 2b: split
+
+Some documents hold several recipes: a cake collection, a box of confectionery recipes, a restaurant's Christmas menu. [`split.py`](../src/recipify/split.py) divides them into **units**, one recipe each, but only in clear cases. Everything else stays whole, with the reason recorded.
+
+**When a document is split.** At its page breaks (PDF pages, or explicit page breaks in Word; Word's own layout breaks don't count), and only if all of these hold:
+
+1. **Named as a collection.** The file name or title says so: "uppskriftir" (recipes), "kökur" (cakes), "tertur", "recipes". The pages of a plated dish are often its components (a sauce, a crumble, a garnish), laid out exactly like separate recipes. In practice the name was the only signal that told the two apart, so it is required.
+2. **Each recipe starts on a titled page.** A page that starts a recipe opens with a title, over named components or over an ingredient list. A page that opens mid-sentence or with ingredients continues the recipe before it.
+3. **Each part is a recipe, not a fragment:** at least 2 measured ingredients and 25 words.
+4. **No translations.** No two parts may have exactly the same quantities, which would make them translations of each other (an Icelandic page and its English version).
+5. **A repeated header names the recipes.** A header on every page must name the recipes; otherwise it is a category ("Sósur", sauces) and the document stays whole. A collection heading above the first recipe ("Brauð", a restaurant's "Jólauppskriftir", Christmas recipes) is set aside and recorded, so it doesn't become the first recipe's title.
+
+**The invariant.** The words of all units, plus the header lines set aside, must equal the words of the document exactly. This is checked whenever a split is made. A document that is split wrongly can be kept whole in `curation.json` (`keep_whole`), and that decision is stored in the split artifact as well.
+
+On the real archive, 10 of 544 documents are split, into 106 recipes. Of the rest, 105 multi-page documents stay whole because they aren't named as collections, which is the right call for plated dishes.
+
 ## Stage 3: structure
 
 [`structure/rules.py`](../src/recipify/structure/rules.py) reads a document as a sequence of components:
@@ -65,11 +82,11 @@ The parser is a small state machine (`start`, `ingredients`, `method`) with a fe
 
 - **Quantities.** A line that starts with a quantity, or ends with one and a unit ("Rolled oats 250 g"), is an ingredient. Oven settings ("140°C, vifta 2"), dates and multiplications are not.
 - **Component names.** A short line directly followed by a quantity is a component name (strong evidence). A short line followed by a list of bare ingredients and then a method label is one too (weak evidence). A short line followed by prose names a component that has only a method ("Beetroot / The beetroots are baked whole…").
-- **Labels and notes.** The source's own labels ("Aðferð:", "Hráefni", "Method") are kept and shown as headings. "Geymsluþol: 4 dagar." becomes a note, even when the PDF wrapped it over two lines.
+- **Labels and notes.** The source's own labels ("Aðferð:", "Hráefni", "Method") are kept and shown as headings. "Geymsluþol: 3 dagar." (shelf life) becomes a note, even when the PDF wrapped it over two lines.
 - **Wrapped lines.** Lines wrapped in the middle of a sentence are joined back into one step. Step numbers and bullets become list markers.
 - **Dropped lines.** A title repeated at the top or after a page break is dropped, and recorded in `Recipe.dropped`.
 
-The parser never edits text. Each source line ends up in exactly one place, which is what makes the fidelity check below meaningful.
+The parser never edits text. Each source line ends up in exactly one place, which is what makes the fidelity check below meaningful. It runs once per unit, and its result is stored under the SHA-256 of the unit's text. The same text always gives the same file, and a changed split or extraction gives a new file beside the old one.
 
 
 ## Stage 4: assess
@@ -89,7 +106,22 @@ A recipe is **ready** only if every check passes. Recall and precision must both
 The catalog then:
 
 - merges *twins*, the same recipe saved as a `.docx` and as its PDF export (same title, at least 90% of words shared), keeping the Word file;
-- gives different recipes that share a title ("Þorskur") their file or folder name, so they can be told apart in the list.
+- gives different recipes that share a title ("Þorskur", cod) their file or folder name, so they can be told apart in the list.
+
+## Traceability
+
+Every recipe in the catalog can be followed back to its source file:
+
+| Link | Stored in | Checked by `recipify trace` |
+| --- | --- | --- |
+| recipe (catalog entry) | `catalog.json`: id `<source sha12>[-<unit>]`, source, unit, pages, engine labels | |
+| structured recipe | `recipes/<unit sha256>/rules@v1.json` | its input hash is the unit's hash, and it is the recipe in the catalog |
+| unit | inside the split decision: page numbers, exact text, set-aside headers | its text hashes to its key, and every page of it occurs on those pages of the extraction |
+| split decision | `splits/<sha256>/<extraction>/pages@v1.json` | decision and reasons are shown |
+| extraction | `extractions/<sha256>/<engine>@v<N>.json` | it belongs to this source's hash |
+| source file | `recipes/…` (and identical copies) | the file on disk still hashes to the recorded SHA-256 |
+
+Nothing in this chain is overwritten. Each engine version and each input text gets its own file, and `history/` keeps every catalog run's tier per recipe, so a recipe's history can be compared across runs.
 
 ## Stage 5: publish
 

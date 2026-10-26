@@ -110,8 +110,12 @@ def _excluded(file: SourceFile) -> str | None:
 
 
 def assess(
-    file: SourceFile, extraction: Extraction | None, structured: Structured | None
+    file: SourceFile,
+    extraction: Extraction | None,
+    structured: Structured | None,
+    text: str | None = None,
 ) -> Assessment:
+    """`text` is what was structured: one unit of a split document, or the whole text."""
     if reason := _excluded(file):
         return Assessment(tier=Tier.EXCLUDED, reasons=[reason])
     if extraction is None:
@@ -129,7 +133,7 @@ def assess(
 
     recipe = structured.recipe
     shown = "\n".join(recipe.lines())
-    recall, precision = fidelity(extraction.text, recipe)
+    recall, precision = fidelity(extraction.text if text is None else text, recipe)
     quality, flags = text_quality(shown)
     words = len(tokens(shown))
     agreement = extraction.checks.get("order_agreement")

@@ -12,6 +12,7 @@ These fictional recipes were written for this project. They show the pipeline on
 | `Restaurant/Desserts/Skyr cheesecake.docx` | an ingredient table | ready |
 | `Restaurant/Mains/Cod with brown butter.docx` | headed components | ready |
 | PDFs exported from Word (`Restaurant/Mains/`, `Sides/`, `Canapés/`, `Breakfast/`) | poppler extraction and the reading-order check | ready |
+| `Bakery/Kökur - uppskriftir.pdf` | two cakes, one per page, in a document named as a collection | split into 2 recipes, both ready |
 | `Restaurant/Eftirréttir/Skyr og bláber.pdf` | a two-column, three-component Icelandic recipe | ready |
 | `Old/Plokkfiskur (1).pdf` | an exact copy | merged into its original |
 | `Restaurant/Desserts/Chocolate mousse.pdf` | the PDF twin of a `.docx` | excluded (same recipe) |

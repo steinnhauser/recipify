@@ -65,6 +65,38 @@ class Extraction(BaseModel):
     notes: str = ""
 
 
+# --- stage 2b: split ----------------------------------------------------------------------
+
+
+class Unit(BaseModel):
+    """One recipe's share of a document: whole pages, so it can be found in the original."""
+
+    index: int  # 1-based position in the document
+    pages: list[int]  # 1-based page numbers in the source
+    title: str = ""
+    text: str  # the exact text of those pages (minus any running header in `dropped`)
+    sha256: str  # of `text`: the key of the structured recipe made from it
+    dropped: list[str] = []  # running header lines repeated on every page
+
+
+class Split(BaseModel):
+    """The split decision for one document; every document has one (often `whole`)."""
+
+    sha256: str  # of the source file
+    engine: str
+    version: int
+    extraction: str  # "<engine>@v<version>" of the text that was split
+    created_at: str = Field(default_factory=now_iso)
+    decision: str  # "split" or "whole"
+    by_hand: bool = False  # kept whole by a decision in curation.json
+    reasons: list[str] = []
+    units: list[Unit]
+
+    @property
+    def label(self) -> str:
+        return f"{self.engine}@v{self.version}"
+
+
 # --- stage 3: structure -------------------------------------------------------------------
 
 
@@ -112,10 +144,13 @@ class Recipe(BaseModel):
 
 
 class Structured(BaseModel):
-    sha256: str
+    sha256: str  # of the source file
     engine: str
     version: int
-    extraction: str  # "<engine>@v<version>" of the input text
+    extraction: str  # "<engine>@v<version>" of the extracted text
+    split: str = ""  # "<engine>@v<version>" of the split decision
+    unit: int = 1  # which recipe of the document
+    input_sha256: str = ""  # of the unit text that was structured: the artifact's key
     created_at: str = Field(default_factory=now_iso)
     recipe: Recipe
 
@@ -135,18 +170,27 @@ class Assessment(BaseModel):
 
 
 class Entry(BaseModel):
-    id: str  # stable: first 12 hex digits of the source's sha256
+    id: str  # stable: the source's sha256[:12], plus "-<unit>" for a recipe split from it
     source: str
     category: Category
     kind: Kind
     pages: int | None = None
     duplicates: list[str] = []
     extraction: str = ""
+    split: str = ""
+    unit: int | None = None  # set when the document was split into several recipes
+    units: int = 1
+    unit_pages: list[int] = []  # the source pages this recipe comes from
     structure: str = ""
     title: str = ""
     labels: dict[str, list[str]] = {}
     assessment: Assessment
     recipe: Recipe | None = None
+
+    @property
+    def ref(self) -> str:
+        """'<source>' or '<source>#<unit>': how the report and history name a recipe."""
+        return self.source if self.unit is None else f"{self.source}#{self.unit}"
 
 
 class Catalog(BaseModel):
