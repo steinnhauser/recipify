@@ -19,7 +19,7 @@ from recipify import trace as tracing
 from recipify.curation import Curation
 from recipify.extract.pdf import render_pages
 from recipify.models import Catalog, Entry, Inventory, Tier
-from recipify.report import reason_group, tier_table
+from recipify.report import reason_group, tier_table, transcription_rows, transcription_table
 from recipify.store import Workspace
 
 app = typer.Typer(
@@ -167,6 +167,40 @@ def register(
         raise typer.BadParameter(f"{source} is not in the inventory (run `recipify inventory`)")
     out = pipeline.register(ws, inv.files[source], text.read_text("utf-8"), engine, accuracy, notes)
     console.print(f"Stored {out}")
+
+
+@app.command()
+def transcriptions(
+    ctx: typer.Context,
+    below: Annotated[
+        float, typer.Option(min=0, max=1, help="Only those less certain than this, e.g. 0.95.")
+    ] = 1.0,
+    out: Annotated[Path | None, typer.Option(help="Also write the table as markdown.")] = None,
+) -> None:
+    """List the transcriptions of scans and photos, least certain first, to check by hand."""
+    ws = _ws(ctx)
+    found = [
+        (f, x)
+        for f, x in pipeline.transcriptions(ws, ws.load_inventory())
+        if x.accuracy is None or x.accuracy < below
+    ]
+    rows = transcription_rows(found, ws.load_catalog() if ws.catalog_path.exists() else Catalog())
+    table = Table()
+    table.add_column("Certainty", justify="right", no_wrap=True)
+    table.add_column("Source", overflow="fold")
+    table.add_column("Recipes", overflow="fold")
+    table.add_column("Tier", no_wrap=True)
+    table.add_column("Engine", no_wrap=True)
+    table.add_column("Notes", max_width=40, no_wrap=True, overflow="ellipsis")
+    for r in rows:
+        table.add_row(
+            *(r[k] for k in ("certainty", "source", "recipes", "tier", "engine", "notes"))
+        )
+    console.print(table)
+    console.print(f"{len(rows)} transcription(s)")
+    if out:
+        out.write_text(transcription_table(rows), encoding="utf-8")
+        console.print(f"Written to {out}")
 
 
 @app.command()

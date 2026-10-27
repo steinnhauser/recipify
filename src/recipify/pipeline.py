@@ -133,6 +133,13 @@ def best_extraction(ws: Workspace, f: SourceFile) -> Extraction | None:
     return found[0] if found else None
 
 
+def transcriptions(ws: Workspace, inv: Inventory) -> list[tuple[SourceFile, Extraction]]:
+    """The transcription each document uses (scans and photos), least certain first."""
+    found = [(f, best_extraction(ws, f)) for f in inv.canonical()]
+    rows = [(f, e) for f, e in found if e is not None and e.costly]
+    return sorted(rows, key=lambda r: (-1 if r[1].accuracy is None else r[1].accuracy, r[0].path))
+
+
 def register(
     ws: Workspace,
     f: SourceFile,
@@ -354,6 +361,7 @@ def _entries(ws: Workspace, f: SourceFile, copies: list[str], curation: Curation
         structured = ws.load_structured(path)
         entry = base.model_copy(deep=True)
         entry.extraction, entry.split = _label(extraction), decision.label
+        entry.transcribed, entry.accuracy = extraction.costly, extraction.accuracy
         entry.unit_pages = unit.pages
         if several:
             entry.id, entry.unit, entry.units = (

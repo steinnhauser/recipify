@@ -88,6 +88,21 @@ def test_register(workdir: Path):
     data = json.loads((workdir / "data/catalog.json").read_text())
     photo = next(e for e in data["entries"] if e["source"] == "photo.jpg")
     assert photo["assessment"]["tier"] == "review"
+    assert photo["transcribed"] and photo["accuracy"] is None
+
+
+def test_transcriptions_least_certain_first(workdir: Path):
+    invoke("inventory")
+    (workdir / "t.md").write_text("Rauðrófur\n4 rauðrófur | 2 stk\nAðferð:\nBakað.", "utf-8")
+    invoke("register", "photo.jpg", "--text", "t.md", "--engine", "vision", "--accuracy", "0.8")
+    out = invoke("transcriptions", "--out", "t.md")  # before a catalog: no titles yet
+    assert "80%" in out and "photo.jpg" in out and "1 transcription(s)" in out
+    invoke("run")
+    invoke("transcriptions", "--out", "list.md")
+    table = (workdir / "list.md").read_text("utf-8").splitlines()
+    assert table[2] == "| Certainty | Source | Recipes | Tier | Engine | Notes |"
+    assert table[4] == "| 80% | photo.jpg | Rauðrófur | review | vision@v1 |  |"
+    assert "0 transcription(s)" in invoke("transcriptions", "--below", "0.8")
 
 
 def test_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

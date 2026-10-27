@@ -23,6 +23,7 @@ SOURCE_KIND = {
     Category.LEGACY_OFFICE: "office document",
     Category.SPREADSHEETS: "spreadsheet",
 }
+UNCERTAIN_BELOW = 0.95  # footers of less certain transcriptions are marked
 esc = html.escape
 
 
@@ -94,14 +95,25 @@ def source_line(e: Entry) -> str:
         pages = f", page{'s' * (len(e.unit_pages) > 1)} {where}; recipe {e.unit} of {e.units}"
     if e.category in NO_TEXT_LAYER:
         kind = "scan" if e.category == Category.IMAGE_BASED_PDFS else "photo"
-        check = "Transcribed by reading the image, then reviewed by hand."
-    else:
-        check = "Every word and number was checked against the original."
     copies = ""
     if e.duplicates:
         copies = f" Identical cop{'ies' if len(e.duplicates) > 1 else 'y'}: "
         copies += "; ".join(map(esc, e.duplicates)) + "."
-    return f"From {esc(e.source)} ({kind}{pages}).{copies} Trace id {e.id}. {check}"
+    return f"From {esc(e.source)} ({kind}{pages}).{copies} Trace id {e.id}. {certainty(e)}"
+
+
+def certainty(e: Entry) -> str:
+    """How sure the text is: proven for a text layer, the stated accuracy of a transcription."""
+    if not e.transcribed:
+        return "Certainty: 100% (every word and number checked against the original)."
+    if e.accuracy is None:
+        return "Certainty: not stated (transcribed from the image)."
+    return f"Certainty: {e.accuracy:.0%} (transcribed from the image)."
+
+
+def uncertain(e: Entry) -> bool:
+    """A transcription to double-check against the original before cooking from it."""
+    return e.transcribed and (e.accuracy is None or e.accuracy < UNCERTAIN_BELOW)
 
 
 def _labels(e: Entry) -> list[str]:
@@ -162,7 +174,8 @@ def static_section(entries: list[Entry], title: str, editable: bool = False) -> 
             f'<h2 class="rt">{esc(e.title)}</h2>'
             f'<p class="lab">{esc(" · ".join(_labels(e)))}</p>'
             f'<div class="body">{recipe_html(e)}</div>'
-            f'<p class="src">{source_line(e)} <a class="up" href="#top">Back to the list</a></p>'
+            f'<p class="src{" uncertain" * uncertain(e)}">{source_line(e)} '
+            '<a class="up" href="#top">Back to the list</a></p>'
             "</article>"
         )
     out += [

@@ -54,7 +54,7 @@ The words behind these decisions are in [`vocabulary.py`](../src/recipify/vocabu
 | Word (`.docx`) | `python-docx` (own XML walker) | Reads text boxes (common in recipe templates; python-docx skips them), keeps soft line breaks, skips Word's duplicate fallback content, and doesn't repeat merged table cells. |
 | `.doc`, `.odt`, `.pptx` | `libreoffice` | Converted to docx or PDF, then read as above. |
 | Spreadsheets | `openpyxl` | One page per sheet. Columns separated by an empty column form blocks, read one after another, so two recipes laid out side by side stay apart; within a block a row reads across (quantity, ingredient, translation). Sheet names that say nothing ("1", "Sheet5") are left out. |
-| Scans, photos of recipes | `register` | `recipify pages` writes the page images. A transcription made from them, by hand or with a vision model, is stored with `recipify register` as `<engine>@v<N>`, and is never overwritten. Photos of plated dishes (in folders such as `Myndir`) are recognised and excluded. |
+| Scans, photos of recipes | `register` | `recipify pages` writes the page images. A transcription made from them, by hand or with a vision model, is stored with `recipify register` as `<engine>@v<N>` with its stated accuracy and notes, and is never overwritten. The accuracy travels into the catalog and the recipe's footer ("Certainty: 92%"); `recipify transcriptions` (`make metadata-list`) lists them least certain first. Photos of plated dishes (in folders such as `Myndir`) are recognised and excluded. |
 
 **Reading-order check.** Every line from the raw extraction must appear, whole, in the layout rendering of the same pages. On the real archive the two agree on every line for 349 of 356 short PDFs. The rest are PDFs whose text is stored in fragments. They go to review rather than risking a recipe with lines in the wrong order.
 
@@ -141,6 +141,6 @@ Nothing in this chain is overwritten. Each engine version and each input text ge
 
 ## What is not done yet
 
-- **Scans (18 photographed recipe pages, plus 12 scanned PDFs).** `pages` and `register` are ready, but there is no text layer to check against, so a transcription stays in `review` until a person has checked it. Internal arithmetic can help: a scaling table whose columns are multiples of the first, and whose totals are sums, checks its own numbers.
+- **Scans and photos.** `pages` and `register` are ready, but there is no text layer to check against, so a transcription stays in `review` until a person has checked it and set its tier; its footer then shows its stated certainty instead of 100%. Internal arithmetic can help: a scaling table whose columns are multiples of the first, and whose totals are sums, checks its own numbers.
 - **Books and collections.** They need splitting into single recipes before they can be checked one by one.
 - **Spreadsheets.** Costing and yield sheets need a table-aware structurer.

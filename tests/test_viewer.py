@@ -93,18 +93,25 @@ def test_source_line_names_the_original():
     )
     assert viewer.source_line(split) == (
         "From Eftirréttir/Ostakaka.pdf (PDF, pages 3, 4; recipe 2 of 3). Identical copies: "
-        "Afrit/Ostakaka.pdf; Gamalt/Ostakaka.pdf. Trace id 0123456789ab-2. Every word and "
-        "number was checked against the original."
+        "Afrit/Ostakaka.pdf; Gamalt/Ostakaka.pdf. Trace id 0123456789ab-2. Certainty: 100% "
+        "(every word and number checked against the original)."
     )
     copy = viewer.source_line(_entry(duplicates=["Afrit/<Ostakaka>.pdf"]))
     assert "Identical copy: Afrit/&lt;Ostakaka&gt;.pdf." in copy
-    photo = _entry(source="Myndir/kaka.jpeg", category=Category.IMAGE_FILES, pages=None)
-    assert viewer.source_line(photo) == (
-        "From Myndir/kaka.jpeg (photo). Trace id 0123456789ab. Transcribed by reading the "
-        "image, then reviewed by hand."
+    photo = _entry(
+        source="Myndir/kaka.jpeg", category=Category.IMAGE_FILES, pages=None, transcribed=True
     )
-    scan = _entry(category=Category.IMAGE_BASED_PDFS, pages=2)
+    assert viewer.source_line(photo) == (
+        "From Myndir/kaka.jpeg (photo). Trace id 0123456789ab. Certainty: not stated "
+        "(transcribed from the image)."
+    )
+    scan = _entry(category=Category.IMAGE_BASED_PDFS, pages=2, transcribed=True, accuracy=0.97)
     assert "(scan, 2 pages)" in viewer.source_line(scan)
+    assert viewer.certainty(scan) == "Certainty: 97% (transcribed from the image)."
+    # less certain transcriptions are marked, so a cook checks them against the original
+    assert viewer.uncertain(photo) and not viewer.uncertain(scan) and not viewer.uncertain(split)
+    page = viewer.render(Catalog(entries=[photo, scan.model_copy(update={"id": "x"})]), "x")
+    assert page.count('<p class="src uncertain">') == 1 and page.count('<p class="src">') == 1
 
 
 def test_lock_roundtrip():

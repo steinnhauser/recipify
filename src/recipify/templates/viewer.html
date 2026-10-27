@@ -94,6 +94,7 @@ body.focus .recipe{margin:0 auto;font-size:1.12rem}
 .edit-only{display:none}body.editable .edit-only{display:inline-block}
 #changes{background:var(--accent);color:#fff;border-radius:99px;font-size:.72rem;padding:0 .45rem;margin-left:.25rem}
 .src.changed::before{content:"✎ ";color:var(--accent)}
+.src.uncertain::before{content:"⚠ ";color:var(--accent)}.src.uncertain{color:var(--ink)}
 dialog.form{max-width:44rem;width:calc(100% - 2rem)}
 .form label{display:block;font-size:.8rem;color:var(--muted);margin:.7rem 0 .2rem}
 .form input[type=text]{width:100%;font:inherit;padding:.4rem .6rem;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
@@ -129,7 +130,7 @@ dialog.form{max-width:44rem;width:calc(100% - 2rem)}
 <footer id="site">Built with recipify · recipes remain the property of their original authors · <a href="#" id="about">About this page</a></footer>
 <dialog id="faq"><button class="icon close" id="faq-x" title="Close">✕</button>
 <h2>About this page</h2>
-<p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF, a Word file or a spreadsheet) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Scans and photos have no text to check against: they were transcribed by reading the image and reviewed by hand, and their footer says so. The footer of every recipe names its original file (its path in the collection, the pages, identical copies) and a trace id, so the original can be found. A recipe edited or added by hand says so at the bottom.</p>
+<p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF, a Word file or a spreadsheet) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Scans and photos have no text to check against: they were transcribed by reading the image, and their footer gives the transcription's certainty (⚠ marks one below 95%: check it against the original). Recipes checked word for word say <i>Certainty: 100%</i>. The footer of every recipe names its original file (its path in the collection, the pages, identical copies) and a trace id, so the original can be found. A recipe edited or added by hand says so at the bottom.</p>
 <p><b>Finding recipes.</b> Search works on titles and ingredients, with or without accents. Pick a Course, Diet, Cuisine or Ingredient to narrow the list; greyed-out choices would leave nothing. Click a label on a recipe to filter by it. Press <kbd>/</kbd> to jump to the search box.</p>
 <p><b>Cooking.</b> Use ½× to 4× to scale the measured ingredients (baker's percentages stay as they are). Tap an ingredient or a step to tick it off. ⤢ shows only the recipe; ⎙ prints it.</p>
 <p class="edit-only"><b>Adding and editing.</b> Use <i>+ New</i>, or ✎ on a recipe, to add or change recipes, and 🗑 to remove one. Changes are kept in this browser until you <i>Export</i>: that saves a new copy of this file, with your changes, which you can open, share and edit further.</p>
@@ -181,7 +182,7 @@ const R = [...document.querySelectorAll('#static article')].map(a => {
   const body = a.querySelector('.body');
   return {id: a.id.slice(1), title: a.querySelector('.rt').textContent, labels: JSON.parse(a.dataset.labels),
     data: a.dataset.recipe ? JSON.parse(a.dataset.recipe) : null, html: body.innerHTML,
-    src: a.querySelector('.src').firstChild.textContent.trim(), changed: a.querySelector('.src').classList.contains('changed')};
+    src: a.querySelector('.src').firstChild.textContent.trim(), changed: a.querySelector('.src').classList.contains('changed'), uncertain: a.querySelector('.src').classList.contains('uncertain')};
 });
 const LS = 'recipify:' + (B.collection || document.title);
 let store = {fav: {}, notes: {}, changes: {added: {}, edited: {}, deleted: []}, exportName: ''};
@@ -260,7 +261,7 @@ function show(id) {
     ${scalable ? `<div class="bar"><span class="scale" role="group" aria-label="Scale the recipe">${[0.5, 1, 2, 3, 4].map(f => `<button data-f="${f}" class="${f === factor ? 'on' : ''}">${f === 0.5 ? '½' : f}×</button>`).join('')}</span><span>Tap an ingredient or step to tick it off</span></div>` : ''}
     <div class="body">${r.html}</div>
     <details class="mine"><summary>My notes</summary><textarea id="note" placeholder="Saved in this browser only">${esc(store.notes[id] || '')}</textarea></details>
-    <p class="src${r.changed ? ' changed' : ''}">${esc(r.src)}</p></article>`;
+    <p class="src${r.changed ? ' changed' : r.uncertain ? ' uncertain' : ''}">${esc(r.src)}</p></article>`;
   scale($('view'));
   $('back').onclick = () => { document.body.classList.remove('reading'); current = null; renderList(); };
   $('fav').onclick = () => { store.fav[id] = !store.fav[id]; save(); show(id); };
@@ -332,7 +333,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const changeCount = () => Object.keys(store.changes.added).length + Object.keys(store.changes.edited).length + store.changes.deleted.length;
 function apply(r, c) {  // c: {data, labels, src}
   r.data = c.data; r.title = c.data.title; r.labels = c.labels; r.src = c.src; r.changed = true;
-  r.html = recipeHtml(c.data); index(r);
+  r.uncertain = false; r.html = recipeHtml(c.data); index(r);
 }
 const ORIGINAL = new Map(R.map(r => [r.id, {...r}]));
 function load() {  // replay this browser's unsaved changes onto the page
@@ -381,7 +382,7 @@ $('editform').onsubmit = () => {
   if (editing) {
     const original = ORIGINAL.get(editing.id);
     const was = original && !original.changed ? original.src : (original ? original.src.replace(/^Edited by hand.*?\. (?=Originally)/, '') : '');
-    const from = was.replace(/^Originally: /, '').replace(/ (Every word and number was checked against the original|Transcribed by reading the image, then reviewed by hand)\.$/, '');
+    const from = was.replace(/^Originally: /, '').replace(/ Certainty: .*$/, '');
     const src = ch.added[editing.id] ? `Added by hand in this file on ${today()}.`
       : `Edited by hand in this file on ${today()}, so no longer checked against the original. Originally: ${from}`;
     (ch.added[editing.id] ? ch.added : ch.edited)[editing.id] = {data, labels, src};

@@ -50,7 +50,7 @@ def test_add_edit_remove_and_export(page: Page, starter: Path, tmp_path: Path):
     page.fill("#e-title", "Ostakaka hússins")
     page.click("#edit-save")
     expect(page.locator(".src")).to_contain_text("Edited by hand")
-    expect(page.locator(".src")).not_to_contain_text("Every word and number was checked")
+    expect(page.locator(".src")).not_to_contain_text("Certainty")
 
     page.click("#items .item >> text=Annað")
     page.click("#del")

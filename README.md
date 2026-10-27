@@ -71,7 +71,7 @@ $ recipify --sources examples/sources trace "Bakery/Kökur - uppskriftir.pdf#2"
 ✓ source     Bakery/Kökur - uppskriftir.pdf  sha256 35758add8c821511…
 ```
 
-A recipe's ID is its source's SHA-256 prefix, plus `-<n>` when it was split from a collection. Its footer in the viewer names the original file by its path in the collection, with its pages, any identical copies and this trace id, and says how the text was checked (word for word, or transcribed from an image and reviewed by hand). The originals themselves are referenced, not embedded: the page stays small and the files stay with their owner.
+A recipe's ID is its source's SHA-256 prefix, plus `-<n>` when it was split from a collection. Its footer in the viewer names the original file by its path in the collection, with its pages, any identical copies and this trace id, and gives its **certainty**: 100% for text checked word for word, or the stated accuracy of a transcription from an image (⚠ below 95%, so the cook checks it against the original). The originals themselves are referenced, not embedded: the page stays small and the files stay with their owner.
 - On the real archive, a full free run takes about 16 seconds once the files have been hashed.
 
 ### Results on the real archive
@@ -127,6 +127,8 @@ uv run recipify register "Scans/notebook.pdf" --text notebook.md --engine vision
 ```
 
 A registered transcription goes to `review`, because there is no text layer to check it against. It moves to `ready` once a person has checked it and set its tier in `curation.json`.
+
+`make metadata-list` (or `recipify transcriptions [--below 0.95] [--out list.md]`) lists every transcription, least certain first, with its recipes, tier, engine version and notes: the list to work through when checking transcriptions by hand. It also writes `data/transcriptions.md`.
 
 Corrections that don't belong in code (a better title, a kind, a tier set after review, a document that must not be split) go in `data/curation.json`. So do words that your collection uses and the defaults don't know: the defaults cover English and Icelandic, and `"vocabulary"` adds to them, for example `{"vocabulary": {"collection_names": ["recettes"], "photo_folders": ["fotos"]}}` ([`vocabulary.py`](src/recipify/vocabulary.py)). Everything under `data/` is git-ignored, so keep one data folder per collection (`--data`).
 

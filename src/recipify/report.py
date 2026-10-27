@@ -4,7 +4,7 @@ import re
 from collections import Counter, defaultdict
 
 from recipify.categories import Category
-from recipify.models import Catalog, Inventory, Tier
+from recipify.models import Catalog, Extraction, Inventory, SourceFile, Tier
 
 TIERS = (Tier.READY, Tier.REVIEW, Tier.EXCLUDED)
 
@@ -42,6 +42,45 @@ def tier_table(catalog: Catalog, inv: Inventory) -> list[tuple[str, int, int, in
                 )
             )
     return rows
+
+
+def transcription_rows(
+    found: list[tuple[SourceFile, Extraction]], catalog: Catalog
+) -> list[dict[str, str]]:
+    """One row per transcription: certainty, source, recipes, tier, engine and notes."""
+    by_source: dict[str, list[str]] = defaultdict(list)
+    tiers: dict[str, str] = {}
+    for e in catalog.entries:
+        by_source[e.source].append(e.title)
+        tiers[e.source] = e.assessment.tier.value
+    return [
+        {
+            "certainty": "not stated" if x.accuracy is None else f"{x.accuracy:.0%}",
+            "source": f.path,
+            "recipes": "; ".join(by_source.get(f.path, [])),
+            "tier": tiers.get(f.path, ""),
+            "engine": f"{x.engine}@v{x.version}",
+            "notes": x.notes,
+        }
+        for f, x in found
+    ]
+
+
+def _cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
+def transcription_table(rows: list[dict[str, str]]) -> str:
+    """The rows as a markdown table, for a file that is easy to read and share."""
+    head = ["certainty", "source", "recipes", "tier", "engine", "notes"]
+    out = [
+        "# Transcriptions, least certain first",
+        "",
+        "| " + " | ".join(h.capitalize() for h in head) + " |",
+        "|" + " --- |" * len(head),
+    ]
+    out += ["| " + " | ".join(_cell(r[h]) for h in head) + " |" for r in rows]
+    return "\n".join(out) + "\n"
 
 
 def render_report(
