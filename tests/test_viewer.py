@@ -76,7 +76,7 @@ def test_render_page():
     hidden = _entry(id="eeeeeeeeeeee", title="Falið", assessment=Assessment(tier=Tier.REVIEW))
     page = viewer.render(Catalog(entries=[_entry(), other, hidden]), "Uppskriftir")
     assert "<title>Uppskriftir</title>" in page
-    assert page.count('<article id="r') == 2 and "Falið" not in page
+    assert page.split("<script>\ntry")[0].count('<article id="r') == 2 and "Falið" not in page
     assert "From Ostakaka.pdf (PDF, 1 page)." in page
     assert "From Ostakaka.pdf (Word document)." in page
     assert "Other (1)" in page and "Dessert (1)" in page
@@ -89,3 +89,20 @@ def test_lock_roundtrip():
     assert decrypt_page(locked, "key") == "<p>secret</p>"
     with pytest.raises(ValueError):
         encrypt_page("x", "")
+
+
+def test_editable_page():
+    import json
+    from html import unescape
+
+    plain = viewer.render(Catalog(entries=[_entry()]), "Uppskriftir")
+    assert 'data-editable=""' in plain and "data-recipe=" not in plain.split("<script>\ntry")[0]
+    page = viewer.render(Catalog(entries=[_entry()]), "Uppskriftir", editable=True)
+    assert 'data-editable="1"' in page and 'data-units="kg|' in page
+    data = json.loads(unescape(page.split('data-recipe="')[1].split('"')[0]))
+    assert data["title"] == "Ostakaka"
+    assert data["sections"][0]["ingredients"][0] == "1,5 kg ostur"
+    assert data["sections"][0]["method_label"] == "Aðferð:"
+    # the collection id is stable, so favourites and notes survive rebuilds and exports
+    collection = page.split('data-collection="')[1][:12]
+    assert collection == viewer.render(Catalog(), "Uppskriftir").split('data-collection="')[1][:12]

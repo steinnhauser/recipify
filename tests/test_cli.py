@@ -45,6 +45,9 @@ def test_stage_by_stage(workdir: Path):
     out = invoke("trace", "Bakarí/Tartdeig.pdf")
     assert "✓ source" in out and "pages@v2: whole: one page" in out
     assert "1 recipes" in invoke("build", "--out", "out/index.html")
+    assert 'data-editable=""' in (workdir / "out/index.html").read_text()
+    invoke("build", "--out", "out/edit.html", "--editable")
+    assert 'data-editable="1"' in (workdir / "out/edit.html").read_text()
     assert (workdir / "out/index.html").is_file()
 
 
@@ -92,6 +95,11 @@ def test_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     shutil.copytree(EXAMPLES, tmp_path / "examples/sources")
     out = invoke("demo", "--report", "site/report.md")
     assert "Wrote site/demo/index.html" in out
+    assert 'data-editable="1"' in (tmp_path / "site/demo/index.html").read_text()
+    out = invoke("starter", "mine.html", "--limit", "1", "--title", "Mínar uppskriftir")
+    assert "(1 recipes)" in out
+    starter = (tmp_path / "mine.html").read_text()
+    assert "<title>Mínar uppskriftir</title>" in starter and 'data-editable="1"' in starter
     report = (tmp_path / "site/report.md").read_text()
     assert "15 recipes ready" in report and "Split documents: 1 into 2 recipes" in report
 

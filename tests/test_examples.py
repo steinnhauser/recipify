@@ -56,5 +56,5 @@ def test_examples_end_to_end(tmp_path: Path):
     assert [e.id[-2:] for e in cakes] == ["-1", "-2"]
 
     page = viewer.render(catalog, "demo")
-    assert page.count('<article id="r') == 15
+    assert page.split("<script>\ntry")[0].count('<article id="r') == 15
     assert "page 2; recipe 2 of 2" in page

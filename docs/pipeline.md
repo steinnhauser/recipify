@@ -134,6 +134,8 @@ Nothing in this chain is overwritten. Each engine version and each input text ge
 
 [`viewer.py`](../src/recipify/viewer.py) writes every ready recipe into one HTML page as plain markup: components, an ingredient list with parsed amounts in `data-` attributes, and numbered steps. The inline script turns that into the app. It adds search, filters, scaling, ticking off ingredients and steps, favourites and notes, and a full-screen reading view on phones. Without JavaScript, the page is still a complete, readable index.
 
+**Editing and export** (only in pages built as editable: the demo, `starter`, `build --editable`). Each recipe also carries its structured data, which a form edits: title, labels, introduction, and components with ingredients, steps and notes. Ingredient lines are parsed by the page with the pipeline's own units, so an edited recipe scales like a converted one; a browser test compares both parsers line by line. Changes are kept in the browser's storage, keyed by a collection id that survives rebuilds and exports, until **Export** writes a new file: the page as loaded, with its plain-HTML index rebuilt. Unchanged recipes are copied byte for byte, and edited or added ones say so in their footer, without the claim that they were checked against an original. An export with no changes is the page itself.
+
 [`lock.py`](../src/recipify/lock.py) encrypts the page with AES-256-GCM, using a key derived with PBKDF2-SHA256. The browser decrypts it with WebCrypto, using the key from the link's `#fragment`.
 
 ## What is not done yet

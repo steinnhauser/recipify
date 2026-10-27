@@ -94,6 +94,7 @@ The viewer is one HTML file with no external requests, so it works offline and c
 - **Recipes in components:** each component lists its quantities in an aligned column next to numbered steps. The source's own labels ("Aðferð", "Hráefni") are kept as headings.
 - **Built for cooking:** scale ½× to 4× (baker's percentages stay as they are), tick off ingredients and steps, and switch to a full-screen reading view on phones. Recipes can also be printed.
 - **Finding recipes:** search that ignores accents, filters with live counts, and course, diet, cuisine and main-ingredient labels detected with [transparent keyword rules](src/recipify/labels.py). Favourites and notes are saved in the browser.
+- **Grows with you:** an editable page (`build --editable`, the demo, and `recipify starter`) lets anyone add, edit and remove recipes in the browser and **Export** the result as a new file of the same kind, named as they like (`.html` is always added). Unsaved changes survive a reload, an edited recipe says it was edited by hand and is no longer marked as checked, and unchanged recipes are copied byte for byte. Private collections are built without it, since an export would be an unencrypted copy.
 - **Readable without JavaScript:** every recipe is written into the page as plain HTML. iOS Quick Look and mail previews, which don't run scripts, still show the whole collection.
 - **Private on a public host:** `recipify lock` encrypts the page (AES-256-GCM, PBKDF2-SHA256), and the key travels in the link's `#fragment`, which browsers never send to the server.
 
@@ -106,6 +107,7 @@ git clone https://github.com/steinnhauser/recipify.git && cd recipify
 uv sync
 uv run recipify demo --out demo.html --report report.md   # the whole pipeline on examples/sources
 open demo.html
+uv run recipify starter recipes.html                      # or: an editable file with two recipes to grow
 ```
 
 ### Your own collection
@@ -168,12 +170,13 @@ More detail on the design and the checks is in [docs/pipeline.md](docs/pipeline.
 ```bash
 uv sync
 uv run pytest --cov                    # 100% line coverage; CI fails below that
+uv run pytest -m browser               # the viewer in Chromium (uv run playwright install chromium)
 uv run ruff check src tests examples && uv run ruff format --check src tests examples
 uv run mypy src                        # strict
 uv run pre-commit install              # optional: the same checks before each commit
 ```
 
-CI runs these on Python 3.12 and 3.13 with poppler installed.
+CI runs these on Python 3.12 and 3.13 with poppler installed, and the browser tests in a job of their own.
 
 ## License
 

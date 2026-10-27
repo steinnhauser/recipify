@@ -5,6 +5,7 @@ not run (iOS Quick Look, mail previews). Where they do, the script builds the ap
 that markup: search, filters, scaling, favourites and notes, all offline.
 """
 
+import hashlib
 import html
 import json
 import re
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from recipify.categories import Category
 from recipify.models import Catalog, Entry, Ingredient, Section, Tier
+from recipify.structure.quantities import UNITS
 
 TEMPLATE = Path(__file__).parent / "templates" / "viewer.html"
 SOURCE_KIND = {
@@ -100,7 +102,27 @@ def _labels(e: Entry) -> list[str]:
     ]
 
 
-def static_section(entries: list[Entry], title: str) -> str:
+def editable_data(e: Entry) -> dict[str, object]:
+    """What the recipe form edits: the structured recipe, with ingredients as plain lines."""
+    assert e.recipe is not None
+    return {
+        "title": e.title,
+        "intro": e.recipe.intro,
+        "sections": [
+            {
+                "name": s.name,
+                "ingredients_label": s.ingredients_label,
+                "ingredients": [i.text for i in s.ingredients],
+                "method_label": s.method_label,
+                "steps": s.steps,
+                "notes": s.notes,
+            }
+            for s in e.recipe.sections
+        ],
+    }
+
+
+def static_section(entries: list[Entry], title: str, editable: bool = False) -> str:
     """All recipes as plain HTML with a course index: the page without JavaScript."""
     groups: dict[str, list[Entry]] = defaultdict(list)
     for e in entries:
@@ -125,8 +147,10 @@ def static_section(entries: list[Entry], title: str) -> str:
     ]
     for e in entries:
         labels = esc(json.dumps(e.labels, ensure_ascii=False))
+        data = esc(json.dumps(editable_data(e), ensure_ascii=False)) if editable else ""
+        recipe = f' data-recipe="{data}"' if editable else ""
         out.append(
-            f'<article id="r{e.id}" data-labels="{labels}">'
+            f'<article id="r{e.id}" data-labels="{labels}"{recipe}>'
             f'<h2 class="rt">{esc(e.title)}</h2>'
             f'<p class="lab">{esc(" · ".join(_labels(e)))}</p>'
             f'<div class="body">{recipe_html(e)}</div>'
@@ -149,16 +173,23 @@ def static_section(entries: list[Entry], title: str) -> str:
     return "\n".join(out)
 
 
-def render(catalog: Catalog, title: str) -> str:
+def render(catalog: Catalog, title: str, editable: bool = False) -> str:
+    """The viewer page. `editable` adds editing and export (off for private collections:
+    an export would save the recipes as a plain, unencrypted file)."""
     entries = sorted(catalog.by_tier(Tier.READY), key=lambda e: e.title.casefold())
     stats = {
         "recipes": len(entries),
         "documents": len(catalog.entries),
         "built": catalog.created_at[:10],
     }
+    # stable across rebuilds and exports, so favourites and notes stay with the collection
+    collection = hashlib.sha256(title.encode("utf-8")).hexdigest()[:12]
     page = TEMPLATE.read_text(encoding="utf-8")
     return (
         page.replace("__TITLE__", esc(title))
         .replace("__STATS__", esc(json.dumps(stats)))
-        .replace("__STATIC__", static_section(entries, title))
+        .replace("__EDITABLE__", "1" if editable else "")
+        .replace("__COLLECTION__", collection)
+        .replace("__UNITS__", esc(UNITS))
+        .replace("__STATIC__", static_section(entries, title, editable))
     )

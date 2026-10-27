@@ -91,9 +91,25 @@ body.focus .recipe{margin:0 auto;font-size:1.12rem}
   .ing li{grid-template-columns:4.6rem 1fr}#site{display:none}
 }
 @media print{header,#list,#gutter,.tools,.scale,details.mine,#site{display:none!important}main{display:block}#view{overflow:visible;padding:0}#app{height:auto}body{background:#fff;color:#000}.cols{grid-template-columns:2fr 3fr}.part{break-inside:avoid}}
+.edit-only{display:none}body.editable .edit-only{display:inline-block}
+#changes{background:var(--accent);color:#fff;border-radius:99px;font-size:.72rem;padding:0 .45rem;margin-left:.25rem}
+.src.changed::before{content:"✎ ";color:var(--accent)}
+dialog.form{max-width:44rem;width:calc(100% - 2rem)}
+.form label{display:block;font-size:.8rem;color:var(--muted);margin:.7rem 0 .2rem}
+.form input[type=text]{width:100%;font:inherit;padding:.4rem .6rem;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+.form textarea{min-height:4.5rem;margin-top:0}
+.form .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 .8rem}
+.form fieldset{border:1px solid var(--line);border-radius:10px;margin:.9rem 0;padding:.4rem .9rem .8rem}
+.form legend{font-size:.85rem;color:var(--muted)}
+.form .row{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem;flex-wrap:wrap}
+.form .primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.name{display:flex;align-items:center;gap:.3rem}.name input{flex:1}.name .ext{color:var(--muted);font-weight:600}
+.hint{font-size:.82rem;color:var(--muted);margin:.3rem 0}
+#changelist{list-style:none;padding:0;margin:.4rem 0;font-size:.88rem}#changelist li{display:flex;justify-content:space-between;gap:.5rem;padding:.25rem 0;border-bottom:1px dashed var(--line)}
+@media(max-width:600px){.form .grid{grid-template-columns:1fr}}
 </style>
 </head>
-<body data-stats="__STATS__">
+<body data-stats="__STATS__" data-editable="__EDITABLE__" data-collection="__COLLECTION__" data-units="__UNITS__" data-next-id="1" data-edited="">
 <div id="app">
 <header>
   <h1>__TITLE__</h1>
@@ -101,6 +117,8 @@ body.focus .recipe{margin:0 auto;font-size:1.12rem}
   <div class="filters"><select id="f-course" aria-label="Course"></select><select id="f-diet" aria-label="Diet"></select><select id="f-cuisine" aria-label="Cuisine"></select><select id="f-ingredients" aria-label="Ingredient"></select>
   <button class="icon" id="favonly" title="Show favourites only">★</button>
   <button class="icon" id="clear" title="Clear search and all filters" hidden>Clear</button>
+  <button class="icon edit-only" id="new" title="Add a recipe">+ New</button>
+  <button class="icon edit-only" id="export" title="Save this collection, with your changes, as a new file">Export</button>
   <button class="icon" id="help" title="About this page">?</button></div>
 </header>
 <main>
@@ -111,38 +129,74 @@ body.focus .recipe{margin:0 auto;font-size:1.12rem}
 <footer id="site">Built with recipify · recipes remain the property of their original authors · <a href="#" id="about">About this page</a></footer>
 <dialog id="faq"><button class="icon close" id="faq-x" title="Close">✕</button>
 <h2>About this page</h2>
-<p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF or a Word file) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Documents that could not be checked this way (scans, photos, cookbooks, spreadsheets) are not shown yet.</p>
+<p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF, a Word file or a spreadsheet) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Documents that could not be checked this way (scans, photos, cookbooks) are not shown yet. A recipe edited or added by hand says so at the bottom.</p>
 <p><b>Finding recipes.</b> Search works on titles and ingredients, with or without accents. Pick a Course, Diet, Cuisine or Ingredient to narrow the list; greyed-out choices would leave nothing. Click a label on a recipe to filter by it. Press <kbd>/</kbd> to jump to the search box.</p>
 <p><b>Cooking.</b> Use ½× to 4× to scale the measured ingredients (baker's percentages stay as they are). Tap an ingredient or a step to tick it off. ⤢ shows only the recipe; ⎙ prints it.</p>
+<p class="edit-only"><b>Adding and editing.</b> Use <i>+ New</i>, or ✎ on a recipe, to add or change recipes, and 🗑 to remove one. Changes are kept in this browser until you <i>Export</i>: that saves a new copy of this file, with your changes, which you can open, share and edit further.</p>
 <p><b>Favourites and notes</b> are saved in this browser only, on this device. They are never uploaded, and they are lost if you clear the browser's site data or use a private window.</p>
 <p><b>Labels</b> (diet, cuisine, ingredients) are detected automatically, so please check the ingredients for allergies.</p>
 </dialog>
+<dialog id="editor" class="form"><form method="dialog" id="editform">
+<h2 id="edit-h">Edit recipe</h2>
+<label for="e-title">Title</label><input type="text" id="e-title" required>
+<div class="grid">
+<div><label for="e-course">Course</label><input type="text" id="e-course" list="d-course" placeholder="e.g. dessert"></div>
+<div><label for="e-dish">Dish</label><input type="text" id="e-dish" list="d-dish"></div>
+<div><label for="e-diet">Diet</label><input type="text" id="e-diet" list="d-diet" placeholder="comma separated"></div>
+<div><label for="e-cuisine">Cuisine</label><input type="text" id="e-cuisine" list="d-cuisine"></div>
+</div>
+<label for="e-ingredients">Main ingredients (for the filter)</label><input type="text" id="e-ingredients" list="d-ingredients" placeholder="comma separated">
+<label for="e-intro">Introduction</label><textarea id="e-intro" placeholder="Serves 4. One paragraph per line."></textarea>
+<div id="parts"></div>
+<p><button type="button" class="icon" id="add-part">+ Add a component</button></p>
+<p class="hint">One ingredient per line, quantity first ("200 g sugar") so it can be scaled. One step per line.</p>
+<div class="row"><button type="button" class="icon" id="edit-cancel">Cancel</button><button type="submit" class="icon primary" id="edit-save">Save</button></div>
+</form>
+<datalist id="d-course"></datalist><datalist id="d-dish"></datalist><datalist id="d-diet"></datalist><datalist id="d-cuisine"></datalist><datalist id="d-ingredients"></datalist>
+</dialog>
+<dialog id="exporter" class="form"><form method="dialog" id="exportform">
+<h2>Export this collection</h2>
+<p class="hint">Saves the whole collection, with your changes, as a new file. Open that file to keep working; the original stays as it was.</p>
+<label for="x-name">File name</label>
+<div class="name"><input type="text" id="x-name" value="recipify" autocomplete="off" aria-describedby="x-saves"><span class="ext">.html</span></div>
+<p class="hint" id="x-saves"></p>
+<div id="x-changes"><b>Unsaved changes</b><ul id="changelist"></ul></div>
+<div class="row"><button type="button" class="icon" id="x-cancel">Close</button><button type="button" class="icon" id="x-share" hidden>Share…</button><button type="button" class="icon primary" id="x-download">Download</button></div>
+<div id="x-after" hidden><p class="hint">Did the file save? Your changes are in it. Clear them from this browser so this page shows the original again.</p>
+<div class="row"><button type="button" class="icon" id="x-clear">Clear the changes here</button></div></div>
+</form></dialog>
 </div>
 __STATIC__
 <script>
 try {
-const STATS = JSON.parse(document.body.dataset.stats || '{}');
+const PRISTINE = document.documentElement.cloneNode(true);  // the page as loaded, for export
+const B = document.body.dataset, EDITABLE = B.editable === '1';
+const STATS = JSON.parse(B.stats || '{}');
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const norm = s => s.toLowerCase().replace(/þ/g, 'th').replace(/ð/g, 'd').replace(/æ/g, 'ae')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '');
 // The recipes are plain HTML in #static, so previews without JavaScript still show them.
 const R = [...document.querySelectorAll('#static article')].map(a => {
   const body = a.querySelector('.body');
   return {id: a.id.slice(1), title: a.querySelector('.rt').textContent, labels: JSON.parse(a.dataset.labels),
-    html: body.innerHTML, text: body.textContent, src: a.querySelector('.src').firstChild.textContent.trim()};
+    data: a.dataset.recipe ? JSON.parse(a.dataset.recipe) : null, html: body.innerHTML,
+    src: a.querySelector('.src').firstChild.textContent.trim(), changed: a.querySelector('.src').classList.contains('changed')};
 });
-const LS = 'recipify:' + document.title;
-let store = {fav: {}, notes: {}};
+const LS = 'recipify:' + (B.collection || document.title);
+let store = {fav: {}, notes: {}, changes: {added: {}, edited: {}, deleted: []}, exportName: ''};
 try { store = Object.assign(store, JSON.parse(localStorage.getItem(LS)) || {}); } catch (e) {}  // storage can be blocked
 const save = () => { try { localStorage.setItem(LS, JSON.stringify(store)); } catch (e) {} };
-const norm = s => s.toLowerCase().replace(/þ/g, 'th').replace(/ð/g, 'd').replace(/æ/g, 'ae')
-  .normalize('NFD').replace(/[̀-ͯ]/g, '');
-const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const FACETS = {course: 'Course', diet: 'Diet', cuisine: 'Cuisine', ingredients: 'Ingredient'};
-R.forEach(r => { r.hay = norm(r.title + ' ' + Object.values(r.labels).flat().join(' ') + ' ' + r.text); r.nt = norm(r.title); });
+const index = r => { r.text = r.html.replace(/<[^>]+>/g, ' '); r.hay = norm(r.title + ' ' + Object.values(r.labels).flat().join(' ') + ' ' + r.text); r.nt = norm(r.title); };
 const sels = {};
-for (const f of Object.keys(FACETS)) {
-  const sel = sels[f] = $('f-' + f); sel.add(new Option(FACETS[f], ''));
-  [...new Set(R.flatMap(r => r.labels[f] || []))].sort().forEach(v => sel.add(new Option(v, v)));
-  sel.onchange = renderList;
+function facetOptions() {
+  for (const f of Object.keys(FACETS)) {
+    const sel = sels[f] = $('f-' + f), keep = sel.value;
+    sel.length = 0; sel.add(new Option(FACETS[f], ''));
+    [...new Set(R.flatMap(r => r.labels[f] || []))].sort().forEach(v => sel.add(new Option(v, v)));
+    sel.value = keep; sel.onchange = renderList;
+  }
 }
 const active = () => Object.keys(FACETS).filter(f => sels[f].value);
 let current = null, favOnly = false, factor = 1;
@@ -174,7 +228,8 @@ function renderList() {
   const rows = filtered();
   $('count').textContent = rows.length + ' recipe' + (rows.length === 1 ? '' : 's');
   $('items').innerHTML = rows.map(r => `<div class="item${r.id === current ? ' sel' : ''}" data-id="${r.id}">
-    <b>${store.fav[r.id] ? '★ ' : ''}${esc(r.title)}</b><small>${esc([...(r.labels.course || []), ...(r.labels.dish || [])].join(' · '))}</small></div>`).join('');
+    <b>${store.fav[r.id] ? '★ ' : ''}${esc(r.title)}${r.changed ? ' ✎' : ''}</b><small>${esc([...(r.labels.course || []), ...(r.labels.dish || [])].join(' · '))}</small></div>`).join('');
+  if (EDITABLE) { const n = changeCount(); $('export').innerHTML = 'Export' + (n ? `<span id="changes">${n}</span>` : ''); }
 }
 function fmt(x, comma) {
   const v = x >= 100 ? Math.round(x) : x >= 10 ? Math.round(x * 10) / 10 : Math.round(x * 100) / 100;
@@ -199,18 +254,20 @@ function show(id) {
   $('view').innerHTML = `<article class="recipe"><button class="icon" id="back" title="Back to the list">← All recipes</button>
     <div class="top"><h2 class="title">${esc(r.title)}</h2><div class="tools">
     <button class="icon ${store.fav[id] ? 'on' : ''}" id="fav" title="Favourite">${store.fav[id] ? '★' : '☆'}</button>
+    <button class="icon edit-only" id="edit" title="Edit this recipe">✎</button><button class="icon edit-only" id="del" title="Remove this recipe">🗑</button>
     <button class="icon" id="full" title="Fullscreen: show only this recipe">⤢<span class="lbl">Exit fullscreen</span></button><button class="icon" id="print" title="Print">⎙</button></div></div>
     <div class="chips">${chips}</div>
     ${scalable ? `<div class="bar"><span class="scale" role="group" aria-label="Scale the recipe">${[0.5, 1, 2, 3, 4].map(f => `<button data-f="${f}" class="${f === factor ? 'on' : ''}">${f === 0.5 ? '½' : f}×</button>`).join('')}</span><span>Tap an ingredient or step to tick it off</span></div>` : ''}
     <div class="body">${r.html}</div>
     <details class="mine"><summary>My notes</summary><textarea id="note" placeholder="Saved in this browser only">${esc(store.notes[id] || '')}</textarea></details>
-    <p class="src">${esc(r.src)}</p></article>`;
+    <p class="src${r.changed ? ' changed' : ''}">${esc(r.src)}</p></article>`;
   scale($('view'));
   $('back').onclick = () => { document.body.classList.remove('reading'); current = null; renderList(); };
   $('fav').onclick = () => { store.fav[id] = !store.fav[id]; save(); show(id); };
   $('print').onclick = () => print();
   $('full').onclick = () => setFocus(!document.body.classList.contains('focus'));
   $('note').oninput = e => { store.notes[id] = e.target.value; save(); };
+  if (EDITABLE) { $('edit').onclick = () => openEditor(r); $('del').onclick = () => removeRecipe(r); }
   $('view').querySelectorAll('.scale button').forEach(b => b.onclick = () => {
     factor = +b.dataset.f; $('view').querySelectorAll('.scale button').forEach(x => x.classList.toggle('on', x === b)); scale($('view'));
   });
@@ -226,9 +283,198 @@ function setFocus(on) {
   document.body.classList.toggle('focus', on); $('view').scrollTop = 0;
   const f = $('full'); if (f) f.title = on ? 'Exit fullscreen (Esc)' : 'Fullscreen: show only this recipe';
 }
-$('empty').innerHTML = `<p><b>${STATS.recipes || R.length} recipes</b>, each checked word for word against its original document.</p>
-  <p>Pick a recipe on the left, or search for a dish or an ingredient.</p>`;
 const vertical = () => matchMedia('(max-width:760px)').matches, main = document.querySelector('main');
+
+/* ---- editing and export (only when the page was built with --editable) ---------------- */
+// Quantities are parsed with the pipeline's own units (data-units), so an edited recipe
+// scales like a converted one.
+const FR = {'½': .5, '¼': .25, '¾': .75, '⅓': 1 / 3, '⅔': 2 / 3, '⅛': .125};
+const NUM = '\\d+(?:[.,]\\d+)?', AMT = `(?:${NUM}\\s*[½¼¾⅓⅔⅛]|${NUM}/\\d+|${NUM}|[½¼¾⅓⅔⅛])`;
+const QTY = new RegExp(`^(?:(?:ca|c\\.a|u\\.?þ\\.?b|approx|about)\\.?\\s*)?(?<a>${AMT})(?:\\s*(?:-|–|til|to)\\s*(?<b>${AMT}))?\\s*(?<unit>(?:${B.units})(?!\\p{L}))?\\.?\\s*(?<name>.*)$`, 'iud');
+const TRAIL = new RegExp(`^(?<name>\\p{L}.*?)\\s+(?<a>${AMT})(?:\\s*(?:-|–)\\s*(?<b>${AMT}))?\\s*(?<unit>(?:${B.units}))\\.?$`, 'iud');
+const STEP = /^\d{1,2}[.)]\s+\p{L}/u;
+function amount(t) {
+  t = t.replace(/\s/g, ''); const last = t.slice(-1), f = FR[last] ? last : '', w = f ? t.slice(0, -1) : t;
+  const v = w.includes('/') ? +w.split('/')[0] / +w.split('/')[1] : (w ? parseFloat(w.replace(',', '.')) : 0);
+  return v + (FR[f] || 0);
+}
+function parseIngredient(line) {
+  if (STEP.test(line)) return null;
+  let m = line.match(QTY), g = m && m.groups;
+  if (m && (g.name || g.unit) && (g.unit || !(/^[°\-–./]|^\*c|^x\b/i.test(g.name)))) {
+    const end = g.unit ? m.indices.groups.unit[0] : g.b ? m.indices.groups.b[1] : m.indices.groups.a[1];
+    return {a: amount(g.a), b: g.b ? amount(g.b) : null, quantity: line.slice(0, end).trim(), unit: g.unit || '', name: g.name.trim()};
+  }
+  m = line.match(TRAIL); g = m && m.groups;
+  return m ? {a: amount(g.a), b: g.b ? amount(g.b) : null, quantity: line.slice(m.indices.groups.a[0], m.indices.groups.unit[0]).trim(), unit: g.unit, name: g.name.trim()} : null;
+}
+const number = v => String(+v.toPrecision(6));
+function ingredientHtml(text) {
+  const i = parseIngredient(text.replace(/ · /g, ' '));
+  if (!i) return `<li class="bare"><span class="q"></span><span class="n">${esc(text)}</span></li>`;
+  const digits = i.quantity.search(/[\d½¼¾⅓⅔⅛]/), prefix = digits > 0 ? i.quantity.slice(0, digits) : '';
+  let attrs = i.unit === '%' ? '' : ` data-a="${number(i.a)}"` + (i.b !== null ? ` data-b="${number(i.b)}"` : '')
+    + (i.quantity.includes(',') ? ' data-comma=""' : '') + (prefix ? ` data-p="${esc(prefix)}"` : '');
+  return `<li><span class="q"><span class="v"${attrs}>${esc(i.quantity)}</span>${i.unit ? ' ' + esc(i.unit) : ''}</span><span class="n">${esc(i.name)}</span></li>`;
+}
+const label = t => esc(t.replace(/[:. ]+$/, '').trim());
+function recipeHtml(d) {  // the same markup the pipeline writes (viewer.py)
+  const intro = d.intro.map(x => `<p>${esc(x)}</p>`).join('');
+  return (intro ? `<div class="intro">${intro}</div>` : '') + d.sections.map(s => {
+    let out = s.name ? `<section class="part"><h3>${esc(s.name)}</h3>` : '<section class="part cont">';
+    out += '<div class="cols">';
+    if (s.ingredients.length) out += `<div class="ing">${s.ingredients_label ? `<h4>${label(s.ingredients_label)}</h4>` : ''}<ul>${s.ingredients.map(ingredientHtml).join('')}</ul></div>`;
+    if (s.steps.length || s.method_label) out += `<div class="met">${s.method_label ? `<h4>${label(s.method_label)}</h4>` : ''}${s.steps.length === 1 ? `<p class="step">${esc(s.steps[0])}</p>` : '<ol>' + s.steps.map(x => `<li>${esc(x)}</li>`).join('') + '</ol>'}</div>`;
+    return out + '</div>' + s.notes.map(x => `<p class="note">${esc(x)}</p>`).join('') + '</section>';
+  }).join('');
+}
+const today = () => new Date().toISOString().slice(0, 10);
+const changeCount = () => Object.keys(store.changes.added).length + Object.keys(store.changes.edited).length + store.changes.deleted.length;
+function apply(r, c) {  // c: {data, labels, src}
+  r.data = c.data; r.title = c.data.title; r.labels = c.labels; r.src = c.src; r.changed = true;
+  r.html = recipeHtml(c.data); index(r);
+}
+const ORIGINAL = new Map(R.map(r => [r.id, {...r}]));
+function load() {  // replay this browser's unsaved changes onto the page
+  const ch = store.changes;
+  for (const [id, c] of Object.entries(ch.edited)) { const r = R.find(x => x.id === id); if (r) apply(r, c); }
+  for (const [id, c] of Object.entries(ch.added)) { const r = {id}; apply(r, c); R.push(r); }
+  for (const id of ch.deleted) { const i = R.findIndex(x => x.id === id); if (i >= 0) R.splice(i, 1); }
+}
+const lines = v => v.split('\n').map(x => x.trim()).filter(Boolean);
+const list = v => v.split(',').map(x => x.trim()).filter(Boolean);
+let editing = null;
+function partField(p, n) {
+  const f = document.createElement('fieldset');
+  f.innerHTML = `<legend>Component ${n}</legend><label>Name (optional)</label><input type="text" class="p-name" value="${esc(p.name)}">
+    <label>Ingredients</label><textarea class="p-ing">${esc(p.ingredients.join('\n'))}</textarea>
+    <label>Method</label><textarea class="p-steps">${esc(p.steps.join('\n'))}</textarea>
+    <label>Notes</label><textarea class="p-notes">${esc(p.notes.join('\n'))}</textarea>
+    <p class="row"><button type="button" class="icon p-remove">Remove this component</button></p>`;
+  f.dataset.il = p.ingredients_label; f.dataset.ml = p.method_label;
+  f.querySelector('.p-remove').onclick = () => f.remove();
+  return f;
+}
+const emptyPart = () => ({name: '', ingredients_label: '', ingredients: [], method_label: '', steps: [], notes: []});
+function openEditor(r) {
+  editing = r;
+  const d = r ? r.data : {title: '', intro: [], sections: [emptyPart()]}, l = r ? r.labels : {};
+  $('edit-h').textContent = r ? 'Edit recipe' : 'New recipe';
+  $('e-title').value = d.title;
+  for (const f of ['course', 'dish', 'diet', 'cuisine', 'ingredients']) {
+    $('e-' + f).value = (l[f] || []).join(', ');
+    $('d-' + f).innerHTML = [...new Set(R.flatMap(x => x.labels[f] || []))].sort().map(v => `<option value="${esc(v)}">`).join('');
+  }
+  $('e-intro').value = d.intro.join('\n');
+  $('parts').innerHTML = ''; d.sections.forEach((p, i) => $('parts').append(partField(p, i + 1)));
+  $('editor').showModal();
+}
+$('add-part').onclick = () => $('parts').append(partField(emptyPart(), $('parts').children.length + 1));
+$('edit-cancel').onclick = () => $('editor').close();
+$('editform').onsubmit = () => {
+  const data = {title: $('e-title').value.trim(), intro: lines($('e-intro').value), sections: [...$('parts').children].map(f => ({
+    name: f.querySelector('.p-name').value.trim(), ingredients_label: f.dataset.il || '', ingredients: lines(f.querySelector('.p-ing').value),
+    method_label: f.dataset.ml || '', steps: lines(f.querySelector('.p-steps').value), notes: lines(f.querySelector('.p-notes').value)}))
+    .filter(p => p.name || p.ingredients.length || p.steps.length || p.notes.length)};
+  const labels = Object.fromEntries(['course', 'dish', 'diet', 'cuisine', 'ingredients'].map(f => [f, list($('e-' + f).value)]));
+  const ch = store.changes;
+  if (editing) {
+    const original = ORIGINAL.get(editing.id);
+    const was = original && !original.changed ? original.src : (original ? original.src.replace(/^Edited by hand.*?\. (?=Originally)/, '') : '');
+    const from = was.replace(/^Originally: /, '').replace(/ Every word and number was checked against the original\.$/, '');
+    const src = ch.added[editing.id] ? `Added by hand in this file on ${today()}.`
+      : `Edited by hand in this file on ${today()}, so no longer checked against the original. Originally: ${from}`;
+    (ch.added[editing.id] ? ch.added : ch.edited)[editing.id] = {data, labels, src};
+    apply(editing, {data, labels, src});
+  } else {
+    const n = +(store.nextId || B.nextId || 1); store.nextId = n + 1;
+    const r = {id: 'new' + n}, c = {data, labels, src: `Added by hand in this file on ${today()}.`};
+    ch.added[r.id] = c; apply(r, c); R.push(r); editing = r;
+  }
+  save(); facetOptions(); show(editing.id);
+};
+function removeRecipe(r) {
+  if (!confirm(`Remove "${r.title}" from this collection? You can undo this until you export.`)) return;
+  const ch = store.changes;
+  if (ch.added[r.id]) delete ch.added[r.id]; else { delete ch.edited[r.id]; ch.deleted.push(r.id); }
+  R.splice(R.indexOf(r), 1); save(); facetOptions();
+  current = null; document.body.classList.remove('reading'); $('view').innerHTML = '<div id="empty"></div>'; renderList();
+}
+function undo(id) {
+  const ch = store.changes, original = ORIGINAL.get(id);
+  if (ch.added[id]) { delete ch.added[id]; R.splice(R.findIndex(x => x.id === id), 1); }
+  else if (ch.edited[id]) { delete ch.edited[id]; Object.assign(R.find(x => x.id === id), original); }
+  else { ch.deleted = ch.deleted.filter(x => x !== id); R.push({...original}); }
+  save(); facetOptions(); renderList(); changeList();
+}
+function changeList() {
+  const ch = store.changes, title = id => (ch.added[id] || ch.edited[id] || {data: ORIGINAL.get(id)}).data.title || ORIGINAL.get(id).title;
+  const rows = [...Object.keys(ch.added).map(id => [id, 'added']), ...Object.keys(ch.edited).map(id => [id, 'edited']), ...ch.deleted.map(id => [id, 'removed'])];
+  $('x-changes').hidden = !rows.length;
+  $('changelist').innerHTML = rows.map(([id, what]) => `<li><span>${esc(title(id))} <i>(${what})</i></span><button type="button" class="icon" data-undo="${esc(id)}">Undo</button></li>`).join('');
+  $('changelist').querySelectorAll('button').forEach(b => b.onclick = () => undo(b.dataset.undo));
+}
+function fileName(v) {  // ".html" is always added, never doubled; characters files cannot hold become "-"
+  v = (v || '').trim().replace(/\.html?$/i, '').replace(/[\/\\:*?"<>|\u0000-\u001f]/g, '-').replace(/\s+/g, ' ').slice(0, 100).trim();
+  return (v || 'recipify') + '.html';
+}
+function articleHtml(r) {
+  const labels = ['course', 'dish', 'diet', 'cuisine', 'ingredients'].flatMap(f => r.labels[f] || []);
+  return `<article id="r${r.id}" data-labels="${esc(JSON.stringify(r.labels))}" data-recipe="${esc(JSON.stringify(r.data))}">`
+    + `<h2 class="rt">${esc(r.title)}</h2><p class="lab">${esc(labels.join(' · '))}</p><div class="body">${r.html}</div>`
+    + `<p class="src${r.changed ? ' changed' : ''}">${esc(r.src)} <a class="up" href="#top">Back to the list</a></p></article>`;
+}
+function exportPage() {  // the page as loaded, with the recipes as they are now
+  const doc = PRISTINE.cloneNode(true);
+  doc.className = 'nojs';
+  if (!changeCount()) return '<!DOCTYPE html>\n' + doc.outerHTML;
+  const st = doc.querySelector('#static'), kept = new Map([...st.querySelectorAll('article')].map(a => [a.id.slice(1), a.outerHTML]));
+  const items = [...R].sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
+  const groups = {};
+  items.forEach(r => (r.labels.course && r.labels.course.length ? r.labels.course : ['other']).forEach(c => (groups[c] = groups[c] || []).push(r)));
+  const toc = (name, rs) => `<details><summary>${esc(name)} (${rs.length})</summary><ul>${rs.map(r => `<li><a href="#r${r.id}">${esc(r.title)}</a></li>`).join('')}</ul></details>`;
+  const notice = st.querySelector('.notice');
+  notice.innerHTML = notice.innerHTML.replace(/All \d+ recipes/, `All ${items.length} recipes`);
+  st.querySelector('#toc').innerHTML = toc('All recipes A-Z', items) + Object.keys(groups).sort().map(c => toc(c[0].toUpperCase() + c.slice(1), groups[c])).join('');
+  st.querySelectorAll('article').forEach(a => a.remove());
+  st.querySelector('#toc').insertAdjacentHTML('afterend', items.map(r => r.changed ? articleHtml(r) : kept.get(r.id)).join('\n'));
+  const body = doc.querySelector('body'), stats = JSON.parse(body.dataset.stats || '{}');
+  stats.recipes = items.length; body.dataset.stats = JSON.stringify(stats);
+  body.dataset.nextId = String(store.nextId || B.nextId || 1); body.dataset.edited = today();
+  return '<!DOCTYPE html>\n' + doc.outerHTML;
+}
+function exportFile() { return new File([exportPage()], fileName($('x-name').value), {type: 'text/html'}); }
+function openExporter() {
+  $('x-name').value = store.exportName || 'recipify';
+  $('x-saves').innerHTML = `Saves as: <b>${esc(fileName($('x-name').value))}</b>`;
+  $('x-after').hidden = true; changeList();
+  $('x-share').hidden = !(navigator.canShare && navigator.canShare({files: [exportFile()]}));
+  $('exporter').showModal();
+}
+$('x-name').oninput = () => { $('x-saves').innerHTML = `Saves as: <b>${esc(fileName($('x-name').value))}</b>`; };
+$('x-cancel').onclick = () => $('exporter').close();
+$('x-download').onclick = () => {
+  const file = exportFile(), a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  store.exportName = $('x-name').value.trim(); save();
+  $('x-after').hidden = !changeCount();
+};
+$('x-share').onclick = () => navigator.share({files: [exportFile()]}).then(() => { $('x-after').hidden = !changeCount(); }).catch(() => {});
+$('x-clear').onclick = () => { store.changes = {added: {}, edited: {}, deleted: []}; save(); location.reload(); };
+if (EDITABLE) {
+  document.body.classList.add('editable');
+  load();
+  $('new').onclick = () => openEditor(null);
+  $('export').onclick = openExporter;
+  addEventListener('beforeunload', e => { if (changeCount()) { e.preventDefault(); e.returnValue = ''; } });
+  window.recipify = {parseIngredient, fileName, exportPage};  // for tests and the curious
+}
+
+R.forEach(index);
+facetOptions();
+$('empty').innerHTML = `<p><b>${R.length} recipes</b>${R.some(r => r.changed) ? '' : ', each checked word for word against its original document'}.</p>
+  <p>Pick a recipe on the left, or search for a dish or an ingredient.</p>`;
 $('gutter').onpointerdown = e => {
   e.preventDefault(); $('gutter').setPointerCapture(e.pointerId); $('gutter').classList.add('drag');
   $('gutter').onpointermove = m => {
@@ -252,7 +498,7 @@ const closeFaq = () => $('faq').close ? $('faq').close() : $('faq').removeAttrib
 $('faq-x').onclick = closeFaq;
 $('faq').onclick = e => { if (e.target === $('faq')) closeFaq(); };
 renderList();
-const h = location.hash.match(/^#r([0-9a-f]+(?:-\d+)?)$/); if (h) show(h[1]);
+const h = location.hash.match(/^#r([0-9a-z]+(?:-\d+)?)$/); if (h) show(h[1]);
 document.getElementById('static').remove();
 } catch (e) {  // never leave a blank page: fall back to the simple view
   document.documentElement.className = 'nojs'; console.error(e);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0
+
+- **Editable recipes and export.** Pages built with `build --editable`, the demo and the new `recipify starter` (an editable file with a couple of sample recipes) let anyone add, edit and remove recipes and export the collection as a new file, named as they like with `.html` always added. Unsaved changes survive a reload; the export dialog lists them with an undo for each. Edited and added recipes say so and no longer claim to be checked against an original; unchanged recipes are exported byte for byte. Private collections are built without editing.
+- **Browser tests** (`pytest -m browser`, own CI job): the editing and export flow in Chromium, file-name rules, and the ingredient parser compared with the pipeline's.
+
 ## 0.6.0
 
 - **Spreadsheets.** Recipe workbooks are read sheet by sheet, each block of columns top to bottom (`openpyxl@v2`), and assessed like any other document. Costing tables (purchase prices, food cost) are set aside as dropped lines (`rules@v3`), and costing sheets count as kitchen paperwork.

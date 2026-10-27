@@ -57,8 +57,23 @@ jobs:
           name: coverage-report
           path: htmlcov/
 
+  browser:
+    # The viewer driven in Chromium: editing, export, and the ingredient parser it shares
+    # with the pipeline. Kept apart so the coverage numbers above stay Python-only.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: Browser tests
+        run: uv run pytest -m browser
+
   deploy:
-    needs: check
+    needs: [check, browser]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

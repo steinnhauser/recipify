@@ -269,11 +269,14 @@ def build(
     ctx: typer.Context,
     out: Annotated[Path, typer.Option(help="Where to write the viewer.")] = Path("dist/index.html"),
     title: Annotated[str, typer.Option(help="Collection name shown in the page.")] = "recipify",
+    editable: Annotated[
+        bool, typer.Option(help="Allow adding, editing and exporting recipes in the page.")
+    ] = False,
 ) -> None:
     """Stage 5: write the single-file viewer with every ready recipe."""
     catalog_ = _ws(ctx).load_catalog()
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(viewer.render(catalog_, title), encoding="utf-8")
+    out.write_text(viewer.render(catalog_, title, editable), encoding="utf-8")
     n = len(catalog_.by_tier(Tier.READY))
     console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB, {n} recipes)")
 
@@ -287,7 +290,19 @@ def demo(
     ),
     report: Annotated[Path | None, typer.Option(help="Also copy the pipeline report here.")] = None,
 ) -> None:
-    """Run the whole free pipeline on the sample documents and build the demo viewer."""
+    """Run the whole pipeline on the sample documents and build the (editable) demo viewer."""
+    result, inv, text = _examples(source)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(viewer.render(result, "recipify demo", editable=True), encoding="utf-8")
+    if report:
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(text, encoding="utf-8")
+    _print_summary(result, inv)
+    console.print(f"Wrote {out}")
+
+
+def _examples(source: Path) -> tuple[Catalog, Inventory, str]:
+    """The catalog of a folder of documents, built in a throwaway workspace."""
     with tempfile.TemporaryDirectory() as tmp:
         ws = Workspace(source, Path(tmp))
         inv = pipeline.run_inventory(ws, Curation())
@@ -295,13 +310,24 @@ def demo(
         pipeline.run_split(ws, inv, Curation())
         pipeline.run_structure(ws, inv)
         result = pipeline.build_catalog(ws, inv, Curation())
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(viewer.render(result, "recipify demo"), encoding="utf-8")
-        if report:
-            report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(ws.report_path.read_text("utf-8"), encoding="utf-8")
-    _print_summary(result, inv)
-    console.print(f"Wrote {out}")
+        return result, inv, ws.report_path.read_text("utf-8")
+
+
+@app.command()
+def starter(
+    out: Annotated[Path, typer.Argument(help="Where to write the starter file.")] = Path(
+        "recipes.html"
+    ),
+    source: Annotated[Path, typer.Option(help="Sample documents.")] = Path("examples/sources"),
+    limit: Annotated[int, typer.Option(min=1, help="How many sample recipes to include.")] = 2,
+    title: Annotated[str, typer.Option(help="Collection name shown in the page.")] = "My recipes",
+) -> None:
+    """Write an editable file with a few sample recipes: a template to grow your own collection."""
+    result, _, _ = _examples(source)
+    ready = sorted(result.by_tier(Tier.READY), key=lambda e: e.title.casefold())[:limit]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(viewer.render(Catalog(entries=ready), title, editable=True), encoding="utf-8")
+    console.print(f"Wrote {out} ({len(ready)} recipes): open it, add recipes, then Export")
 
 
 @app.command()
