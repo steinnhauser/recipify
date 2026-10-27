@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from recipify.categories import Category
+from recipify.categories import NO_TEXT_LAYER, Category
 from recipify.models import Catalog, Entry, Ingredient, Section, Tier
 from recipify.structure.quantities import UNITS
 
@@ -85,15 +85,23 @@ def recipe_html(e: Entry) -> str:
 
 
 def source_line(e: Entry) -> str:
+    """Where the recipe comes from: the file's path in the collection, the pages, identical
+    copies and the id `recipify trace` takes. Originals are referenced, never embedded."""
     kind = SOURCE_KIND.get(e.category, "document")
     pages = f", {e.pages} page{'s' * (e.pages != 1)}" if e.pages else ""
     if e.unit is not None:
         where = ", ".join(map(str, e.unit_pages))
         pages = f", page{'s' * (len(e.unit_pages) > 1)} {where}; recipe {e.unit} of {e.units}"
-    return (
-        f"From {esc(Path(e.source).name)} ({kind}{pages}). Every word and number was checked "
-        "against the original."
-    )
+    if e.category in NO_TEXT_LAYER:
+        kind = "scan" if e.category == Category.IMAGE_BASED_PDFS else "photo"
+        check = "Transcribed by reading the image, then reviewed by hand."
+    else:
+        check = "Every word and number was checked against the original."
+    copies = ""
+    if e.duplicates:
+        copies = f" Identical cop{'ies' if len(e.duplicates) > 1 else 'y'}: "
+        copies += "; ".join(map(esc, e.duplicates)) + "."
+    return f"From {esc(e.source)} ({kind}{pages}).{copies} Trace id {e.id}. {check}"
 
 
 def _labels(e: Entry) -> list[str]:

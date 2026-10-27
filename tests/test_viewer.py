@@ -77,10 +77,34 @@ def test_render_page():
     page = viewer.render(Catalog(entries=[_entry(), other, hidden]), "Uppskriftir")
     assert "<title>Uppskriftir</title>" in page
     assert page.split("<script>\ntry")[0].count('<article id="r') == 2 and "Falið" not in page
-    assert "From Ostakaka.pdf (PDF, 1 page)." in page
-    assert "From Ostakaka.pdf (Word document)." in page
+    assert "From Eftirréttir/Ostakaka.pdf (PDF, 1 page). Trace id 0123456789ab." in page
+    assert "From Eftirréttir/Ostakaka.pdf (Word document). Trace id ffffffffffff." in page
     assert "Other (1)" in page and "Dessert (1)" in page
     assert "&quot;recipes&quot;: 2" in page
+
+
+def test_source_line_names_the_original():
+    split = _entry(
+        id="0123456789ab-2",
+        unit=2,
+        units=3,
+        unit_pages=[3, 4],
+        duplicates=["Afrit/Ostakaka.pdf", "Gamalt/Ostakaka.pdf"],
+    )
+    assert viewer.source_line(split) == (
+        "From Eftirréttir/Ostakaka.pdf (PDF, pages 3, 4; recipe 2 of 3). Identical copies: "
+        "Afrit/Ostakaka.pdf; Gamalt/Ostakaka.pdf. Trace id 0123456789ab-2. Every word and "
+        "number was checked against the original."
+    )
+    copy = viewer.source_line(_entry(duplicates=["Afrit/<Ostakaka>.pdf"]))
+    assert "Identical copy: Afrit/&lt;Ostakaka&gt;.pdf." in copy
+    photo = _entry(source="Myndir/kaka.jpeg", category=Category.IMAGE_FILES, pages=None)
+    assert viewer.source_line(photo) == (
+        "From Myndir/kaka.jpeg (photo). Trace id 0123456789ab. Transcribed by reading the "
+        "image, then reviewed by hand."
+    )
+    scan = _entry(category=Category.IMAGE_BASED_PDFS, pages=2)
+    assert "(scan, 2 pages)" in viewer.source_line(scan)
 
 
 def test_lock_roundtrip():

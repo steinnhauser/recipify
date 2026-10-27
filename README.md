@@ -7,7 +7,7 @@
 
 **A document-processing pipeline that turns a kitchen's archive of recipe files into verified, structured recipes, and publishes them as one offline HTML file that chefs can cook from.**
 
-recipify started from a real archive: about 1,900 files collected over many years by a professional kitchen, mostly in Icelandic. It holds Word documents, PDFs exported from Word (often laid out in two or three columns), scanned notebooks, photos, spreadsheets, cookbooks, menus, cleaning plans and many copies of the same files. Out of that archive, recipify publishes **508 recipes that were checked word for word against their source documents**, including recipes split out of 15 documents that each held several (Word collections, a recipe book, recipe spreadsheets). It holds back everything it can't check yet, and the report says why for each document.
+recipify started from a real archive: about 1,900 files collected over many years by a professional kitchen, mostly in Icelandic. It holds Word documents, PDFs exported from Word (often laid out in two or three columns), scanned notebooks, photos, spreadsheets, cookbooks, menus, cleaning plans and many copies of the same files. Out of that archive, recipify publishes **524 recipes**: 508 checked word for word against their source documents, including recipes split out of 15 documents that each held several (Word collections, a recipe book, recipe spreadsheets), and 16 photographed recipe pages transcribed from the image and reviewed by hand. It holds back everything it can't check yet, and the report says why for each document.
 
 **[Live demo](https://steinnhm.com/recipify/demo/)**: the whole pipeline run in CI on the [sample documents](examples/sources) ([pipeline report](https://steinnhm.com/recipify/demo/report.md))
 
@@ -71,7 +71,7 @@ $ recipify --sources examples/sources trace "Bakery/Kökur - uppskriftir.pdf#2"
 ✓ source     Bakery/Kökur - uppskriftir.pdf  sha256 35758add8c821511…
 ```
 
-A recipe's ID is its source's SHA-256 prefix, plus `-<n>` when it was split from a collection. Its footer in the viewer names the original file and page.
+A recipe's ID is its source's SHA-256 prefix, plus `-<n>` when it was split from a collection. Its footer in the viewer names the original file by its path in the collection, with its pages, any identical copies and this trace id, and says how the text was checked (word for word, or transcribed from an image and reviewed by hand). The originals themselves are referenced, not embedded: the page stays small and the files stay with their owner.
 - On the real archive, a full free run takes about 16 seconds once the files have been hashed.
 
 ### Results on the real archive
@@ -81,11 +81,10 @@ A recipe's ID is its source's SHA-256 prefix, plus `-<n>` when it was split from
 | Source files | 1,916 |
 | Unique documents (byte-identical copies merged) | 930 |
 | Recipes, after splitting 15 collections into 248 recipes | 1,163 |
-| **Ready**: verified, structured and published | **508** |
-| Review: converted, but a check failed (no clear ingredient list, uncertain reading order, transcribed from images, ingredient formulas without a method) | 135 |
-| Waiting for a transcription (photographed recipe pages) | 18 |
-| Photos of plated dishes | 304 |
-| Not recipes, or not yet: books, course material, menus, costing sheets and other paperwork, PDF twins of Word files, older copies of the same recipe | 198 |
+| **Ready**: verified, structured and published (16 of them transcribed from photos and reviewed by hand) | **524** |
+| Review: converted, but a check failed (no clear ingredient list, uncertain reading order, transcribed from images, ingredient formulas without a method) | 134 |
+| Photos of plated dishes | 305 |
+| Not recipes, or not yet: books, course material, menus, costing sheets and other paperwork, PDF twins of Word files, older copies of the same recipe | 200 |
 
 ## The viewer
 

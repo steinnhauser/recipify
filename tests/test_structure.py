@@ -304,3 +304,37 @@ Annað blað
         "Total cost · 1500",
     ]
     assert r.sections[-1].ingredients[-1].text == "1 l soð"  # a new page ends the table
+
+
+def test_scaling_tables_are_read_by_column():
+    text = """Rabarbarasulta
+
+| | X1 | X4 | x10 |
+| --- | --- | --- | --- |
+| | g | g | g |
+| Rabarbari | 500 | 2000 | 5000 |
+| Sykur | 250 | 1000 | 2500 |
+| Pektín | 6 stk | 24 stk | 60 stk |
+| | | 0 | 0 |
+| Kælt yfir nótt | | 0 | 0 |
+| Samtals | 756 | 3024 | 7560 |
+| Hrært | | 3 | 4 |
+Soðið í 10 mín.
+
+| | | | ½ |
+| Smjör | 100g | 15% | 50g |"""
+    r = structure(text, "x")
+    _check(r, text)
+    first, last = r.sections
+    assert [(i.quantity, i.unit, i.name) for i in first.ingredients] == [
+        ("500", "g", "Rabarbari"),
+        ("250", "g", "Sykur"),
+        ("6", "stk", "Pektín"),
+    ]
+    assert first.ingredients[0].text == "Rabarbari · 500"
+    assert first.notes == ["Kælt yfir nótt", "Samtals · 756"]
+    assert "Hrært · 3 · 4" in r.lines()  # a row that does not fit is read as a plain line
+    assert "X1 · X4 · x10" in r.dropped and "2000" in r.dropped and "g · g · g" in r.dropped
+    # without an X1 column, the recipe's own amounts are the first unlabelled column
+    assert [(i.text, i.name) for i in last.ingredients] == [("Smjör · 100g · 15%", "Smjör · 15%")]
+    assert "50g" in r.dropped

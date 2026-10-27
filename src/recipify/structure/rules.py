@@ -19,7 +19,7 @@ from recipify.models import Ingredient, Recipe, Section
 from recipify.structure.quantities import NUMBERED_STEP, parse_ingredient
 from recipify.text import fold
 
-ENGINE, VERSION = "rules", 3
+ENGINE, VERSION = "rules", 4
 
 METHOD_LABEL = re.compile(  # matched on the original text, so the rest keeps its offsets
     r"^(?:a[ðd]fer[ðd]|method|methods|directions|instructions|preparation|framkvæmd"
@@ -54,6 +54,13 @@ TEMPERATURE_OR_TIME = re.compile(r"\d\s*°|\bgrad|\b\d+\s*(?:min|klst|hours?|sek
 # A costing table (purchase prices, food cost, sales price) is business data, not part of
 # the recipe: from its header row to the end of the page it is set aside in `dropped`.
 COSTING_HEADER = re.compile(r"purchase price|food cost|cost of sales|innkaupsverd|kostnadarverd")
+# A scaling table: a header row of batch sizes ("X1 · X5 · X10", or "½") over rows of
+# "name · amount · amount...". The recipe's own column (X1, or the first unlabelled one) gives
+# the ingredient; the other batch sizes are set aside in `dropped`, since the viewer scales.
+SCALE_COLUMN = re.compile(r"^(?:[x×]\s?\d+(?:[.,]\d+)?|1/2|½)$", re.I)
+BASE_COLUMN = re.compile(r"^[x×]\s?1$", re.I)
+AMOUNT_CELL = re.compile(r"^(\d+(?:[.,]\d+)?)\s*([^\W\d_]*)$")
+TOTAL_ROW = re.compile(r"^(?:weight )?total\b|^samtals\b|^heildar")
 WRAP_CHARS = 35  # a step line shorter than this ended there; it was not wrapped
 BULLET = re.compile(r"^[-•*–]\s+")
 HEADING = re.compile(r"^#{1,6}\s+")
@@ -71,6 +78,9 @@ class Line:
     bullet: bool = False
     heading: bool = False
     number: str = ""  # "3" for a numbered step "3. ..."
+    cells: tuple[str, ...] = ()  # a table row's cells, empty ones included
+    ingredient: Ingredient | None = None  # a scaling-table row, read by column
+    note: bool = False  # a scaling-table row without an amount ("Serve chilled", the total)
 
     @property
     def folded(self) -> str:
@@ -104,8 +114,8 @@ def _lines(text: str) -> list[Line]:
         elif m := NUMBERED_STEP.match(line):
             item.number = m.group(1)  # stripped only if the line becomes a step
         if "|" in item.text:  # a table row: "600 g | cod" or "| 600 g | cod |"
-            cells = [c.strip() for c in item.text.strip("|").split("|")]
-            item.text = " · ".join(c for c in cells if c)
+            item.cells = tuple(c.strip() for c in item.text.strip("|").split("|"))
+            item.text = " · ".join(c for c in item.cells if c)
         out.append(item)
         blank = page = False
     return out
@@ -123,6 +133,59 @@ def _instruction(line: Line) -> bool:
 
 def _is_qty(line: Line) -> bool:
     return not line.number and parse_ingredient(line.text.replace(" · ", " ")) is not None
+
+
+@dataclass
+class _Scale:
+    base: int  # the column with the recipe's own amounts
+    others: set[int]  # columns of other batch sizes
+    units: dict[int, str]  # from a row of units under the header ("g · g · g")
+
+
+def _scale_header(cells: tuple[str, ...]) -> _Scale | None:
+    """'| | X1 | X5 | X10 |' or '| | | | 1/2 |': an empty name cell, then batch sizes."""
+    labelled = {i for i, c in enumerate(cells) if SCALE_COLUMN.match(c)}
+    if not labelled or cells[0] or any(c and i not in labelled for i, c in enumerate(cells)):
+        return None
+    base = next((i for i in sorted(labelled) if BASE_COLUMN.match(cells[i])), None)
+    if base is None:  # no X1: the recipe's own amounts are the first unlabelled column
+        base = next((i for i in range(1, len(cells)) if i not in labelled), None)
+    return None if base is None else _Scale(base, labelled - {base}, {})
+
+
+def _zero(cell: str) -> bool:
+    return cell in ("", "0")
+
+
+def _scale_row(line: Line, scale: _Scale) -> list[str] | None:
+    """Read one row of a scaling table into `line`; returns the cells set aside, or None
+    when the row does not fit the table (it is then read like any other line)."""
+    cells = line.cells
+    name, base = cells[0], cells[scale.base] if scale.base < len(cells) else ""
+    others = [c for i, c in enumerate(cells) if i in scale.others and c]
+    aside = scale.others | {0, scale.base}
+    extras = [c for i, c in enumerate(cells) if c and i not in aside]  # e.g. a percentage
+    if not name:
+        values = [c for c in cells if c]
+        if values and all(c.isalpha() and len(c) <= 4 for c in values):  # "g · g · g"
+            scale.units = {i: c for i, c in enumerate(cells) if c}
+            return [line.text]
+        return [line.text] if all(map(_zero, cells)) else None  # an empty row of the sheet
+    amount = AMOUNT_CELL.match(base)
+    if amount and not TOTAL_ROW.match(fold(name)):
+        quantity, unit = amount.group(1), amount.group(2) or scale.units.get(scale.base, "")
+        line.ingredient = Ingredient(
+            text=" · ".join([name, base, *extras]),
+            amount=float(quantity.replace(",", ".")),
+            quantity=quantity,
+            unit=unit,
+            name=" · ".join([name, *extras]),
+        )
+        return others
+    if amount or all(map(_zero, others)):  # the total, or "Serve chilled" with empty amounts
+        line.text, line.note = " · ".join(c for c in [name, base, *extras] if c), True
+        return others
+    return None
 
 
 class _Parser:
@@ -247,6 +310,15 @@ class _Parser:
                 self._add_note(line)
                 continue
             self.note_open = False
+            if line.ingredient:  # read by column from a scaling table
+                if self.mode == "method" and self.section.steps:
+                    self._start_component()
+                self.section.ingredients.append(line.ingredient)
+                self.mode = "ingredients"
+                continue
+            if line.note:
+                self._add_note(line)
+                continue
             folded, empty = line.folded, not (self.section.ingredients or self.section.steps)
             evidence = self._evidence(i)
             if INGREDIENTS_LABEL.match(folded):
@@ -338,7 +410,7 @@ def structure(text: str, fallback_title: str) -> Recipe:
     else:
         title, body = first.text.rstrip(":").strip(), lines[1:]
         parser.recipe.title = title
-    key, costing = fold(title), False
+    key, costing, scale = fold(title), False, None
     for n, line in enumerate(body):
         costing = (costing and not line.page_start) or bool(
             " · " in line.text and COSTING_HEADER.search(line.folded)
@@ -346,6 +418,16 @@ def structure(text: str, fallback_title: str) -> Recipe:
         echo = fold(line.text).rstrip(":").strip() == key and (n < 3 or line.page_start)
         if costing or echo:  # costing tables, and echoes of the title (page headers)
             parser.recipe.dropped.append(line.text)
-        else:
-            parser.lines.append(line)
+            continue
+        if not line.cells:
+            scale = None  # a table ends at the first line that is not a row
+        elif header := _scale_header(line.cells):
+            scale = header
+            parser.recipe.dropped.append(line.text)
+            continue
+        elif scale and (aside := _scale_row(line, scale)) is not None:
+            parser.recipe.dropped.extend(aside)
+            if not (line.ingredient or line.note):
+                continue
+        parser.lines.append(line)
     return parser.parse()

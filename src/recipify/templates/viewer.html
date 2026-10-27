@@ -129,7 +129,7 @@ dialog.form{max-width:44rem;width:calc(100% - 2rem)}
 <footer id="site">Built with recipify · recipes remain the property of their original authors · <a href="#" id="about">About this page</a></footer>
 <dialog id="faq"><button class="icon close" id="faq-x" title="Close">✕</button>
 <h2>About this page</h2>
-<p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF, a Word file or a spreadsheet) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Documents that could not be checked this way (scans, photos, cookbooks) are not shown yet. A recipe edited or added by hand says so at the bottom.</p>
+<p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF, a Word file or a spreadsheet) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Scans and photos have no text to check against: they were transcribed by reading the image and reviewed by hand, and their footer says so. The footer of every recipe names its original file (its path in the collection, the pages, identical copies) and a trace id, so the original can be found. A recipe edited or added by hand says so at the bottom.</p>
 <p><b>Finding recipes.</b> Search works on titles and ingredients, with or without accents. Pick a Course, Diet, Cuisine or Ingredient to narrow the list; greyed-out choices would leave nothing. Click a label on a recipe to filter by it. Press <kbd>/</kbd> to jump to the search box.</p>
 <p><b>Cooking.</b> Use ½× to 4× to scale the measured ingredients (baker's percentages stay as they are). Tap an ingredient or a step to tick it off. ⤢ shows only the recipe; ⎙ prints it.</p>
 <p class="edit-only"><b>Adding and editing.</b> Use <i>+ New</i>, or ✎ on a recipe, to add or change recipes, and 🗑 to remove one. Changes are kept in this browser until you <i>Export</i>: that saves a new copy of this file, with your changes, which you can open, share and edit further.</p>
@@ -381,7 +381,7 @@ $('editform').onsubmit = () => {
   if (editing) {
     const original = ORIGINAL.get(editing.id);
     const was = original && !original.changed ? original.src : (original ? original.src.replace(/^Edited by hand.*?\. (?=Originally)/, '') : '');
-    const from = was.replace(/^Originally: /, '').replace(/ Every word and number was checked against the original\.$/, '');
+    const from = was.replace(/^Originally: /, '').replace(/ (Every word and number was checked against the original|Transcribed by reading the image, then reviewed by hand)\.$/, '');
     const src = ch.added[editing.id] ? `Added by hand in this file on ${today()}.`
       : `Edited by hand in this file on ${today()}, so no longer checked against the original. Originally: ${from}`;
     (ch.added[editing.id] ? ch.added : ch.edited)[editing.id] = {data, labels, src};
@@ -473,7 +473,7 @@ if (EDITABLE) {
 
 R.forEach(index);
 facetOptions();
-$('empty').innerHTML = `<p><b>${R.length} recipes</b>${R.some(r => r.changed) ? '' : ', each checked word for word against its original document'}.</p>
+$('empty').innerHTML = `<p><b>${R.length} recipes</b>${R.some(r => r.changed) ? '' : ', each checked against its original document'}.</p>
   <p>Pick a recipe on the left, or search for a dish or an ingredient.</p>`;
 $('gutter').onpointerdown = e => {
   e.preventDefault(); $('gutter').setPointerCapture(e.pointerId); $('gutter').classList.add('drag');

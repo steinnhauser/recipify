@@ -89,7 +89,7 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert tart.assessment.fidelity == tart.assessment.precision == 1.0
     assert tart.duplicates == ["copy/Tartdeig (1).pdf"]
     assert tart.labels["course"] == ["bread & pastry"]
-    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v3"
+    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v4"
     assert by_source["Eftirréttir/Skyrkaka.docx"].title == "Skyrkaka góða"
     assert by_source["Handbook.pdf"].assessment.reasons == [
         "book (10 pages): not split into recipes yet"
