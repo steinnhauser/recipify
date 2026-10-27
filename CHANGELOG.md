@@ -4,6 +4,10 @@
 
 - **Editable recipes and export.** Pages built with `build --editable`, the demo and the new `recipify starter` (an editable file with a couple of sample recipes) let anyone add, edit and remove recipes and export the collection as a new file, named as they like with `.html` always added. Unsaved changes survive a reload; the export dialog lists them with an undo for each. Edited and added recipes say so and no longer claim to be checked against an original; unchanged recipes are exported byte for byte. Private collections are built without editing.
 - **Browser tests** (`pytest -m browser`, own CI job): the editing and export flow in Chromium, file-name rules, and the ingredient parser compared with the pipeline's.
+- **Every recipe names its original.** The footer gives the source's path in the collection, its pages, identical copies and the trace id, and says how the text was checked. Originals stay referenced, not embedded.
+- **Certainty.** The footer gives 100% for text checked word for word, or the stated accuracy of a transcription from an image, with a warning below 95%. `recipify transcriptions` lists every transcription least certain first.
+- **Scaling tables** (`rules@v4`). Tables with a header of batch sizes (X1, X5, …) are read by column: the recipe's own amounts become scalable ingredients and the other batch sizes are set aside, so fidelity still holds.
+- On the archive: 524 recipes are ready, including 16 photographed recipe pages transcribed and reviewed by hand.
 
 ## 0.6.0
 
