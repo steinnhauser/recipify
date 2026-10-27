@@ -9,7 +9,9 @@ breaks in Word) when all of these hold:
   a garnish) laid out exactly like separate recipes, so the name is the deciding signal;
 - every page with its own title starts a recipe (a title over named components, or a
   title directly over an ingredient list); untitled pages continue the recipe before them;
-- every resulting part is a recipe on its own, not a fragment (measured ingredients, 25+ words);
+- most resulting parts (75%, and at least two) are recipes on their own, not fragments
+  (measured ingredients, 25+ words); the thin ones are still separate units, and the
+  assessment decides whether they are ready;
 - no two parts carry exactly the same numbers (a translation of the same recipe);
 - a header repeated on every page names the recipes ("Gulrótarkaka & Hjónabandssæla" over
   "Gulrótarkaka" and "Hjónabandssæla"); otherwise it is a category ("Sósur") and the
@@ -18,15 +20,20 @@ breaks in Word) when all of these hold:
 """
 
 import hashlib
+import re
 from collections import Counter
 
 from recipify.models import Recipe, Split, Unit
 from recipify.structure import rules
+from recipify.structure.quantities import parse_ingredient
 from recipify.text import fold, tokens
 from recipify.vocabulary import Vocabulary
 
-ENGINE, VERSION = "pages", 1
+ENGINE, VERSION = "pages", 2
 MIN_MEASURED, MIN_WORDS = 2, 25
+MIN_COMPLETE_SHARE = 0.75  # thin parts are kept (and assessed) if most parts are recipes
+# A line of a table of contents: "Skyrkaka 3", "12 | Vanilla ice cream", "Brauð ....... 4".
+CONTENTS_LINE = re.compile(r"^\d+\s*(?:\||$)|[\s.]\d+$")
 
 
 def pages(text: str) -> list[str]:
@@ -59,9 +66,25 @@ def _shape(recipe: Recipe) -> str:
     if not recipe.title_in_text or not recipe.sections or recipe.title[:1].islower():
         return "untitled"  # a page that opens mid-sentence continues the one before
     first = recipe.sections[0]
-    if first.name or recipe.intro:
-        return "named"
-    return "direct" if first.ingredients else "untitled"
+    return "direct" if first.ingredients and not (first.name or recipe.intro) else "named"
+
+
+def _front_matter(page: str) -> bool:
+    """A cover (a title and little else) or a table of contents, ahead of the recipes."""
+    lines = [line.strip() for line in page.splitlines() if line.strip()]
+    if len(lines) <= 3:
+        return not any(parse_ingredient(line) for line in lines)
+    contents = sum(bool(CONTENTS_LINE.search(line)) for line in lines)
+    return contents / len(lines) >= 0.6
+
+
+def _category(page: str) -> str:
+    """'# Eftirréttir' over '## Skyrkaka': the first heading names a section of the book."""
+    lines = [line.strip() for line in page.splitlines() if line.strip()]
+    if len(lines) >= 2 and lines[0].startswith("#") and lines[1].startswith("#"):
+        if len(lines[0]) - len(lines[0].lstrip("#")) <= len(lines[1]) - len(lines[1].lstrip("#")):
+            return lines[0]
+    return ""
 
 
 def _complete(recipe: Recipe) -> bool:
@@ -100,6 +123,9 @@ def plan(
         return _whole(text, "one page")
     if not collection.search(fold(f"{name} {_first_line(numbered[0][1])}")):
         return _whole(text, "not named as a collection of recipes, so pages may be one dish")
+    front: list[str] = []  # a cover and a table of contents are set aside, not recipes
+    while len(numbered) > 2 and _front_matter(numbered[0][1]):
+        front.append(numbered.pop(0)[1])
 
     firsts = [fold(_first_line(p)) for _, p in numbered]
     header = _first_line(numbered[0][1]) if len(set(firsts)) == 1 else ""
@@ -110,6 +136,11 @@ def plan(
             return _whole(text, "every page repeats a header that does not name the recipes")
     else:
         bodies = list(numbered)
+    categories = [_category(body) for _, body in bodies]
+    bodies = [
+        (n, _without_first_line(b) if c else b)
+        for (n, b), c in zip(bodies, categories, strict=True)
+    ]
 
     shapes = [_shape(rules.structure(body, "")) for _, body in bodies]
     if shapes[0] == "untitled":
@@ -140,22 +171,30 @@ def plan(
             k,
             [bodies[i][0] for i in g],
             [bodies[i][1] for i in g],
-            ([heading] if k == 1 and heading else [])
-            + ([header] * len(g) if header else []),  # header lines removed from the pages
+            (front + [heading] if k == 1 and heading else front if k == 1 else [])
+            + ([header] * len(g) if header else [])  # header lines removed from the pages
+            + [categories[i] for i in g if categories[i]],
         )
         for k, g in enumerate(groups, 1)
     ]
     incomplete = [u.title for u in units if not _complete(rules.structure(u.text, ""))]
-    if incomplete:
-        return _whole(text, f"not every part is a complete recipe ({', '.join(incomplete)})")
+    complete = len(units) - len(incomplete)
+    if complete < 2 or complete < MIN_COMPLETE_SHARE * len(units):
+        return _whole(text, f"too few parts are complete recipes ({', '.join(incomplete)})")
     signatures = [_numbers(u.text) for u in units]
     if any(a == b for i, a in enumerate(signatures) for b in signatures[i + 1 :]):
         return _whole(text, "two parts have the same quantities (a translation?)")
     reason = f"{len(units)} recipes, each starting on a new page with its own title"
+    if incomplete:
+        reason += f" ({len(incomplete)} without a full ingredient list)"
     if header:
         reason += f" under the shared header {header!r}"
     if heading:
         reason += f"; the heading {heading!r} above the first recipe names the collection"
+    if front:
+        reason += f"; {len(front)} page(s) of front matter (cover, contents) set aside"
+    if any(categories):
+        reason += f"; {sum(map(bool, categories))} section heading(s) set aside"
     return "split", [reason], units
 
 

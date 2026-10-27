@@ -282,3 +282,25 @@ Steikt smælki"""
         (["900 g hveiti", "10 g salt"], ["Bakið við 170°C í 35 mín", "Steikt smælki"]),
     ]
     assert r.sections[0].name == "Botn"
+
+
+def test_costing_tables_are_set_aside():
+    text = """Lambasteik
+2 kg lambalæri
+20 g salt
+Aðferð:
+Steikt við 180°C.
+hráefni | Amount | Unit | Purchase Price
+0.1 | kg | 2000
+Total cost | 1500
+\f
+Annað blað
+1 l soð"""
+    r = structure(text, "x")
+    _check(r, text)
+    assert r.dropped == [
+        "hráefni · Amount · Unit · Purchase Price",
+        "0.1 · kg · 2000",
+        "Total cost · 1500",
+    ]
+    assert r.sections[-1].ingredients[-1].text == "1 l soð"  # a new page ends the table

@@ -19,6 +19,6 @@ These fictional recipes were written for this project. They show the pipeline on
 | `Scans/Beetroot salad.png` | a photo of a printed recipe | excluded (needs a transcription) |
 | `Kitchen handbook 2019.pdf` | a 14-page book | excluded (book) |
 | `Missi listi.docx` | a mise en place list | excluded (reference) |
-| `Costing - lamb shank.xlsx` | a costing sheet | review (spreadsheet) |
+| `Costing - lamb shank.xlsx` | a costing sheet | excluded (reference) |
 
 `uv run recipify demo --report report.md` runs the whole pipeline on them. [`tests/test_examples.py`](../tests/test_examples.py) checks every row of this table.

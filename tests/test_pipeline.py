@@ -89,7 +89,7 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert tart.assessment.fidelity == tart.assessment.precision == 1.0
     assert tart.duplicates == ["copy/Tartdeig (1).pdf"]
     assert tart.labels["course"] == ["bread & pastry"]
-    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v2"
+    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v3"
     assert by_source["Eftirréttir/Skyrkaka.docx"].title == "Skyrkaka góða"
     assert by_source["Handbook.pdf"].assessment.reasons == [
         "book (10 pages): not split into recipes yet"
@@ -235,7 +235,7 @@ def test_assessment_reasons():
     reasons = assess(_source(category=Category.SPREADSHEETS), extraction, s2).reasons
     assert any("plating guide" in r for r in reasons)
     assert any("unstructured" in r for r in reasons)
-    assert reasons[0].startswith("spreadsheet")
+    assert not any(r.startswith("spreadsheet") for r in reasons)  # judged like any document
 
     empty = structured.model_copy(update={"recipe": Recipe(title="x")})
     reasons = assess(_source(category=Category.IMAGE_FILES), extraction, empty).reasons

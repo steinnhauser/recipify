@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- **Spreadsheets.** Recipe workbooks are read sheet by sheet, each block of columns top to bottom (`openpyxl@v2`), and assessed like any other document. Costing tables (purchase prices, food cost) are set aside as dropped lines (`rules@v3`), and costing sheets count as kitchen paperwork.
+- **Better splitting** (`pages@v2`). A cover and a table of contents are set aside as front matter, as are section headings above a recipe's heading. A collection is split when most of its parts are recipes, and the thin parts are assessed like any other. "recipe book" counts as a collection name.
+- On the archive: 15 documents become 248 recipes, and 508 recipes are ready (up from 445).
+
 ## 0.5.0
 
 - **Plug and play.** `recipify run <folder>` processes any folder of recipe files and writes the viewer. The words that steer triage and splitting moved out of the code into a `Vocabulary` with English and Icelandic defaults, which a collection extends in `curation.json`. The inventory records where its sources live, so `trace` finds them, and `lock` takes its publish URL from `--base-url` or `RECIPIFY_BASE_URL`.

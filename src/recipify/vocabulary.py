@@ -19,14 +19,14 @@ from pydantic import BaseModel
 # Kitchen paperwork that is not a recipe, recognised by file name.
 REFERENCE_NAMES = [
     "menu", "mise en place", "prep list", "order list", "cleaning", "rota\\b", "staff",
-    "rules", "price list", "cooking times",
+    "rules", "price list", "cooking times", "costing",
     "missi", "\\w*sedill", "thrif", "pantanir", "simaskra", "starfsm", "reglur", "rutina",
     "vaktstjor", "innihaldslys", "\\w*utreikn", "hladbord", "leidarbok", "eldunartim",
 ]  # fmt: skip
 # Folders that hold photos of dishes rather than of recipes.
 PHOTO_FOLDERS = ["photos?", "pictures?", "images?", "img", "myndir"]
 # File names or titles that announce a collection of recipes (one per page).
-COLLECTION_NAMES = ["recipes", "uppskrift", "kokur\\b", "tertur\\b"]
+COLLECTION_NAMES = ["recipes", "recipe book", "uppskrift", "kokur\\b", "tertur\\b"]
 # Form fields of school assignments and exams (student and teacher names).
 COURSEWORK_MARKERS = [
     "student\\b", "teacher\\b", "nemandi", "nemendur", "kennari", "kennarar", "namstadur",

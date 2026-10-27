@@ -51,7 +51,7 @@ def test_untitled_pages_continue_the_recipe_before():
         (doc(CAKE, PIE), "Lamb with goat cheese", "not named as a collection of recipes"),
         (doc("200 g hveiti\n100 g sykur", PIE), "uppskriftir", "the first page has no title"),
         (doc(CAKE, "og bakað lengur.\nKælt."), "uppskriftir", "the pages continue one recipe"),
-        (doc(CAKE, "Krem\n200 g rjómi\nÞeytt."), "uppskriftir", "not every part is a complete"),
+        (doc(CAKE, "Krem\n200 g rjómi\nÞeytt."), "uppskriftir", "too few parts are complete"),
         (doc(CAKE, CAKE.replace("Gulrótarkaka", "Carrot cake")), "uppskriftir", "two parts"),
         (doc("Sósur\n" + CAKE, "Sósur\n" + PIE), "uppskriftir", "every page repeats a header"),
     ],
@@ -83,10 +83,39 @@ def test_collection_heading_above_the_first_recipe():
 
 def test_split_records_the_decision_and_checks_coverage():
     result = split("ab" * 32, "poppler@v2", doc(CAKE, PIE), "uppskriftir")
-    assert (result.decision, result.label, result.extraction) == ("split", "pages@v1", "poppler@v2")
+    assert (result.decision, result.label, result.extraction) == ("split", "pages@v2", "poppler@v2")
     kept = split("ab" * 32, "poppler@v2", doc(CAKE, PIE), "uppskriftir", keep_whole=True)
     assert kept.decision == "whole" and kept.by_hand
     assert kept.reasons == ["kept whole by hand in curation.json"]
     result.units[0].text = "Gulrótarkaka"  # a unit that lost words
     with pytest.raises(ValueError, match="lost or repeated"):
         check(doc(CAKE, PIE), result)
+
+
+def test_front_matter_section_headings_and_thin_parts():
+    cover = "Uppskriftabókin"
+    contents = "Efnisyfirlit\nKökur 3\nGulrótarkaka 3\nHjónabandssæla 4\nKryddkaka 5"
+    third = PIE.replace("Hjónabandssæla", "Kryddkaka").replace("200 g", "250 g")
+    thin = "Rjómi\nÞeyttur rjómi\nSalt\nAðferð:\nÞeytt þar til hann heldur formi."
+    text = doc(cover, contents, "# Kökur\n## " + CAKE, PIE, third, thin)
+    decision, reasons, units = plan(text, "x")
+    assert decision == "split"
+    assert [(u.title, u.pages) for u in units] == [
+        ("Gulrótarkaka", [3]),
+        ("Hjónabandssæla", [4]),
+        ("Kryddkaka", [5]),
+        ("Rjómi", [6]),
+    ]
+    assert units[0].dropped == [cover, contents, "# Kökur"]
+    assert "2 page(s) of front matter" in reasons[0] and "1 section heading(s)" in reasons[0]
+    assert "(1 without a full ingredient list)" in reasons[0]
+    split("ab" * 32, "x", text, "x")  # the coverage check holds with everything set aside
+
+
+def test_contents_lines():
+    from recipify.split import CONTENTS_LINE
+
+    assert all(
+        map(CONTENTS_LINE.search, ["12 | Vanilla ice cream", "Brauð ....... 4", "Kökur 16", "7"])
+    )
+    assert not CONTENTS_LINE.search("200 g hveiti")

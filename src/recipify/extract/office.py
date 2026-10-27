@@ -1,5 +1,6 @@
 """Spreadsheets and legacy office documents, converted locally (LibreOffice for old formats)."""
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,9 +11,11 @@ from openpyxl import load_workbook
 from recipify.extract.docx import extract_docx
 from recipify.extract.pdf import extract_pdf
 
-SPREADSHEET_ENGINE, SPREADSHEET_VERSION = "openpyxl", 1
+SPREADSHEET_ENGINE, SPREADSHEET_VERSION = "openpyxl", 2
 LEGACY_ENGINE, LEGACY_VERSION = "libreoffice", 2
 MAX_ROWS = 2000
+# Sheet names that say nothing about the content: "1", "Sheet5", "Blað2" (Icelandic Excel).
+GENERIC_SHEET = re.compile(r"^(?:\d+|sheet\s*\d*|blad\s*\d*|tafla\s*\d*|feuil\w*\s*\d*)$", re.I)
 
 
 def _soffice(path: Path, target: str, outdir: Path) -> Path:
@@ -51,17 +54,43 @@ def _cell(value: object) -> str:
     return str(value).strip().replace("\n", " ").replace("|", "/")
 
 
+def _column_blocks(rows: list[list[str]]) -> list[list[int]]:
+    """Groups of neighbouring columns, separated by at least one empty column."""
+    used = sorted({i for row in rows for i, cell in enumerate(row) if cell})
+    blocks: list[list[int]] = []
+    for col in used:
+        if blocks and col == blocks[-1][-1] + 1:
+            blocks[-1].append(col)
+        else:
+            blocks.append([col])
+    return blocks
+
+
+def _sheet(rows: list[list[str]]) -> list[str]:
+    """Each column block read top to bottom; within a block, a row reads left to right.
+
+    Two recipes laid out side by side (columns B and E) stay apart, while a row such as
+    "500 g | Milk | 500 g | Mjólk" keeps its quantity, name and translation together.
+    """
+    lines = []
+    for block in _column_blocks(rows):
+        cells = [[row[i] for i in block if i < len(row) and row[i]] for row in rows]
+        lines += [" | ".join(c) for c in cells if c]
+    return lines
+
+
 def _xlsx(path: Path, title: str) -> str:
     wb = load_workbook(path, read_only=True, data_only=True)
-    blocks = [f"# {title}"]
+    pages = []
     for ws in wb.worksheets:
         rows = [[_cell(c) for c in row] for row in ws.iter_rows(values_only=True, max_row=MAX_ROWS)]
-        lines = [" | ".join(c for c in r if c) for r in rows]
-        lines = [line for line in lines if line]
+        lines = _sheet(rows)
         if lines:
-            blocks.append(f"## {ws.title}\n\n" + "\n".join(lines))
+            name = ws.title.strip()
+            meaningful = not GENERIC_SHEET.match(name.replace("ð", "d"))
+            pages.append((f"## {name}\n\n" if meaningful else "") + "\n".join(lines))
     wb.close()
-    return "\n\n".join(blocks) + "\n"
+    return f"# {title}\n\n" + "\n\f\n".join(pages) + "\n"  # one page per sheet
 
 
 def extract_spreadsheet(path: Path) -> str:

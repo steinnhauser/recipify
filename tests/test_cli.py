@@ -43,7 +43,7 @@ def test_stage_by_stage(workdir: Path):
     assert "tier: excluded" in invoke("show", "Handbook.pdf")
     assert "not in the catalog" in fails("show", "nope.pdf")
     out = invoke("trace", "Bakarí/Tartdeig.pdf")
-    assert "✓ source" in out and "pages@v1: whole: one page" in out
+    assert "✓ source" in out and "pages@v2: whole: one page" in out
     assert "1 recipes" in invoke("build", "--out", "out/index.html")
     assert (workdir / "out/index.html").is_file()
 

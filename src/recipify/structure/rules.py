@@ -19,7 +19,7 @@ from recipify.models import Ingredient, Recipe, Section
 from recipify.structure.quantities import NUMBERED_STEP, parse_ingredient
 from recipify.text import fold
 
-ENGINE, VERSION = "rules", 2
+ENGINE, VERSION = "rules", 3
 
 METHOD_LABEL = re.compile(  # matched on the original text, so the rest keeps its offsets
     r"^(?:a[ðd]fer[ðd]|method|methods|directions|instructions|preparation|framkvæmd"
@@ -51,6 +51,9 @@ METHOD_VERBS = set(
     "pour spread cut fry season blend rest preheat sift soak melt".split()
 )
 TEMPERATURE_OR_TIME = re.compile(r"\d\s*°|\bgrad|\b\d+\s*(?:min|klst|hours?|sek)\b")
+# A costing table (purchase prices, food cost, sales price) is business data, not part of
+# the recipe: from its header row to the end of the page it is set aside in `dropped`.
+COSTING_HEADER = re.compile(r"purchase price|food cost|cost of sales|innkaupsverd|kostnadarverd")
 WRAP_CHARS = 35  # a step line shorter than this ended there; it was not wrapped
 BULLET = re.compile(r"^[-•*–]\s+")
 HEADING = re.compile(r"^#{1,6}\s+")
@@ -335,9 +338,13 @@ def structure(text: str, fallback_title: str) -> Recipe:
     else:
         title, body = first.text.rstrip(":").strip(), lines[1:]
         parser.recipe.title = title
-    key = fold(title)
-    for n, line in enumerate(body):  # echoes of the title: repeated headings, page headers
-        if fold(line.text).rstrip(":").strip() == key and (n < 3 or line.page_start):
+    key, costing = fold(title), False
+    for n, line in enumerate(body):
+        costing = (costing and not line.page_start) or bool(
+            " · " in line.text and COSTING_HEADER.search(line.folded)
+        )
+        echo = fold(line.text).rstrip(":").strip() == key and (n < 3 or line.page_start)
+        if costing or echo:  # costing tables, and echoes of the title (page headers)
             parser.recipe.dropped.append(line.text)
         else:
             parser.lines.append(line)

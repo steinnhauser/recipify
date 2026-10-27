@@ -138,8 +138,6 @@ def assess(
 
     if file.category in NO_TEXT_LAYER:
         reasons.append("read from images: cannot be checked against a text layer")
-    if file.category == Category.SPREADSHEETS:
-        reasons.append("spreadsheet: tables are not structured into recipes yet")
     if recall < 1 or precision < 1:
         reasons.append(f"text differs from the source (recall {recall}, precision {precision})")
     if agreement is not None and agreement < 1:

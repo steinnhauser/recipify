@@ -53,7 +53,7 @@ The words behind these decisions are in [`vocabulary.py`](../src/recipify/vocabu
 | PDF with a text layer | `poppler` | `pdftotext -raw` keeps the order in which the document was written. Word draws each column of a multi-column recipe in turn, so components stay together. `-layout` mode renders the same pages visually. |
 | Word (`.docx`) | `python-docx` (own XML walker) | Reads text boxes (common in recipe templates; python-docx skips them), keeps soft line breaks, skips Word's duplicate fallback content, and doesn't repeat merged table cells. |
 | `.doc`, `.odt`, `.pptx` | `libreoffice` | Converted to docx or PDF, then read as above. |
-| Spreadsheets | `openpyxl` | One line per row. |
+| Spreadsheets | `openpyxl` | One page per sheet. Columns separated by an empty column form blocks, read one after another, so two recipes laid out side by side stay apart; within a block a row reads across (quantity, ingredient, translation). Sheet names that say nothing ("1", "Sheet5") are left out. |
 | Scans, photos of recipes | `register` | `recipify pages` writes the page images. A transcription made from them, by hand or with a vision model, is stored with `recipify register` as `<engine>@v<N>`, and is never overwritten. Photos of plated dishes (in folders such as `Myndir`) are recognised and excluded. |
 
 **Reading-order check.** Every line from the raw extraction must appear, whole, in the layout rendering of the same pages. On the real archive the two agree on every line for 349 of 356 short PDFs. The rest are PDFs whose text is stored in fragments. They go to review rather than risking a recipe with lines in the wrong order.
@@ -72,7 +72,9 @@ Some documents hold several recipes: a cake collection, a box of confectionery r
 
 **The invariant.** The words of all units, plus the header lines set aside, must equal the words of the document exactly. This is checked whenever a split is made. A document that is split wrongly can be kept whole in `curation.json` (`keep_whole`), and that decision is stored in the split artifact as well.
 
-On the real archive, 10 of 544 documents are split, into 106 recipes. Of the rest, 105 multi-page documents stay whole because they aren't named as collections, which is the right call for plated dishes.
+Front matter is set aside too: a cover (a title and little else) and a table of contents (lines that start or end with a page number), and a section heading above a recipe's own heading ("# Eftirréttir" over "## Skyrkaka") (`pages@v2`). Most parts must be recipes (75%, at least two); a thin part still becomes its own unit and is assessed like any other.
+
+On the real archive, 15 documents are split, into 248 recipes. Of the rest, 105 multi-page documents stay whole because they aren't named as collections, which is the right call for plated dishes.
 
 ## Stage 3: structure
 
@@ -89,7 +91,7 @@ The parser is a small state machine (`start`, `ingredients`, `method`) with a fe
 - **Labels and notes.** The source's own labels ("Aðferð:", "Hráefni", "Method") are kept and shown as headings. "Geymsluþol: 3 dagar." (shelf life) becomes a note, even when the PDF wrapped it over two lines.
 - **Wrapped lines.** Lines wrapped in the middle of a sentence are joined back into one step. Step numbers and bullets become list markers.
 - **Instructions between ingredients.** Bakery sheets often interleave short instructions with the ingredients: "Lagt í bleyti" (soak), "Þessu er hrært vel saman" (mix this well), "Bakað við 175°C í 40 mín". A line with a cooking verb and at least three words, or with a temperature or a time, closes the group of ingredients above it as its step. The source's order is kept: the viewer shows each group with its instruction (`rules@v2`).
-- **Dropped lines.** A title repeated at the top or after a page break is dropped, and recorded in `Recipe.dropped`.
+- **Dropped lines.** A title repeated at the top or after a page break is dropped, and so is a costing table (from a header naming purchase prices or food cost to the end of the page): both are recorded in `Recipe.dropped` (`rules@v3`).
 
 The parser never edits text. Each source line ends up in exactly one place, which is what makes the fidelity check below meaningful. It runs once per unit, and its result is stored under the SHA-256 of the unit's text. The same text always gives the same file, and a changed split or extraction gives a new file beside the old one.
 

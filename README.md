@@ -7,7 +7,7 @@
 
 **A document-processing pipeline that turns a kitchen's archive of recipe files into verified, structured recipes, and publishes them as one offline HTML file that chefs can cook from.**
 
-recipify started from a real archive: about 1,900 files collected over many years by a professional kitchen, mostly in Icelandic. It holds Word documents, PDFs exported from Word (often laid out in two or three columns), scanned notebooks, photos, spreadsheets, cookbooks, menus, cleaning plans and many copies of the same files. Out of that archive, recipify publishes **439 recipes that were checked word for word against their source documents**, including 106 recipes split out of 10 documents that each held several. It holds back everything it can't check yet, and the report says why for each document.
+recipify started from a real archive: about 1,900 files collected over many years by a professional kitchen, mostly in Icelandic. It holds Word documents, PDFs exported from Word (often laid out in two or three columns), scanned notebooks, photos, spreadsheets, cookbooks, menus, cleaning plans and many copies of the same files. Out of that archive, recipify publishes **508 recipes that were checked word for word against their source documents**, including recipes split out of 15 documents that each held several (Word collections, a recipe book, recipe spreadsheets). It holds back everything it can't check yet, and the report says why for each document.
 
 **[Live demo](https://steinnhm.com/recipify/demo/)**: the whole pipeline run in CI on the [sample documents](examples/sources) ([pipeline report](https://steinnhm.com/recipify/demo/report.md))
 
@@ -37,8 +37,8 @@ flowchart LR
 | Stage | What it does | Stored as |
 | --- | --- | --- |
 | **1 Inventory** | Hashes every file, classifies it by its content rather than its extension (a `.pdf` can be a Word file or an EPUB), merges identical copies and triages each document as a recipe, a book (EPUB, or more than 8 pages) or reference material (mise en place lists, menus, staff rules). | `inventory.json` |
-| **2 Extract** | Gets the text out locally and for free. PDFs use poppler in content-stream order, so each component of a multi-column recipe stays together, and the result is cross-checked against poppler's layout rendering. Word documents are read from the XML, including the text boxes that python-docx skips. Scans get a transcription through `pages` and `register`. | `extractions/<sha256>/<engine>@v<N>.json` |
-| **2b Split** | Splits a document that holds several recipes (a confectionery or cake collection) at its page breaks, one recipe per unit. It only splits clear cases: the document must be named as a collection, every recipe must start on its own titled page, and the parts must not be translations of each other. A plated dish whose components fill several pages stays whole. Every decision, split or not, is stored with its reason. | `splits/<sha256>/<extraction>/pages@v<N>.json` |
+| **2 Extract** | Gets the text out locally and for free. PDFs use poppler in content-stream order, so each component of a multi-column recipe stays together, and the result is cross-checked against poppler's layout rendering. Word documents are read from the XML, including the text boxes that python-docx skips. Spreadsheets are read sheet by sheet, each block of columns top to bottom, so recipes laid out side by side don't mix. Scans get a transcription through `pages` and `register`. | `extractions/<sha256>/<engine>@v<N>.json` |
+| **2b Split** | Splits a document that holds several recipes (a confectionery or cake collection, a recipe book, a workbook with one recipe per sheet) at its page breaks or sheets, one recipe per unit. A cover, a table of contents and section headings are set aside. It only splits clear cases: the document must be named as a collection, every recipe must start on its own titled page, and the parts must not be translations of each other. A plated dish whose components fill several pages stays whole. Every decision, split or not, is stored with its reason. | `splits/<sha256>/<extraction>/pages@v<N>.json` |
 | **3 Structure** | Splits the text into components (a sauce, a crumble, a dough), each with its ingredients, method steps and notes, and parses quantities so they can be scaled. Deterministic rules do this, so the same text always gives the same recipe. | `recipes/<unit sha256>/<engine>@v<N>.json` |
 | **4 Assess** | Counts every word and number in the extracted text and in the structured recipe, and checks them against each other. It also checks reading order, garbled text, whether there is an ingredient list and a method, and how long the document is. A document is `ready` only when every check passes. | `catalog.json`, `report.md` |
 | **5 Publish** | Builds one self-contained HTML file from the `ready` recipes, and optionally encrypts it for public hosting. | `dist/index.html`, `site/index.html` |
@@ -80,12 +80,12 @@ A recipe's ID is its source's SHA-256 prefix, plus `-<n>` when it was split from
 | --- | ---: |
 | Source files | 1,916 |
 | Unique documents (byte-identical copies merged) | 930 |
-| Recipes, after splitting 10 collections into 106 recipes | 1,026 |
-| **Ready**: verified, structured and published | **439** |
-| Review: converted, but a check failed (no clear ingredient list, uncertain reading order, transcribed from images) | 87 |
+| Recipes, after splitting 15 collections into 248 recipes | 1,163 |
+| **Ready**: verified, structured and published | **508** |
+| Review: converted, but a check failed (no clear ingredient list, uncertain reading order, transcribed from images, ingredient formulas without a method) | 135 |
 | Waiting for a transcription (photographed recipe pages) | 18 |
 | Photos of plated dishes | 304 |
-| Not recipes, or not yet: books, long collections, course material, menus and other paperwork, PDF twins of Word files, older copies of the same recipe | 178 |
+| Not recipes, or not yet: books, course material, menus, costing sheets and other paperwork, PDF twins of Word files, older copies of the same recipe | 198 |
 
 ## The viewer
 

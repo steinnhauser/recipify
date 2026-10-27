@@ -27,7 +27,7 @@ def test_examples_end_to_end(tmp_path: Path):
         if e.assessment.tier != Tier.READY
     }
     assert reasons == {
-        "Costing - lamb shank.xlsx": "spreadsheet: tables are not structured into recipes yet",
+        "Costing - lamb shank.xlsx": "reference material, not a recipe",
         "Kitchen handbook 2019.pdf": "book (14 pages): not split into recipes yet",
         "Missi listi.docx": "reference material, not a recipe",
         "Restaurant/Desserts/Chocolate mousse.pdf": (

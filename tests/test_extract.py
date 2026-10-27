@@ -156,7 +156,7 @@ def test_spreadsheets_and_legacy_office(tmp_path: Path, monkeypatch: pytest.Monk
     wb.create_sheet("Tómt")
     wb.save(tmp_path / "b.xlsx")
     assert office.extract_spreadsheet(tmp_path / "b.xlsx") == (
-        "# b\n\n## Brauð\n\nHveiti | 1000 | 2.5 | a / b\n"
+        "# b\n\n## Brauð\n\nHveiti | 1000 | 2.5\na / b\n"  # two column blocks, one after the other
     )
 
     def fake_soffice(path: Path, target: str, outdir: Path) -> Path:
@@ -197,3 +197,19 @@ def test_engines_and_page_images(tmp_path: Path, make_docx, make_pdf):
     scan = make_pdf(tmp_path / "scan.pdf", ["x", "y"])
     pages = render_pages(scan, tmp_path / "pages", dpi=30)
     assert [p.name for p in pages] == ["scan-1.jpg", "scan-2.jpg"]
+
+
+def test_spreadsheet_blocks_and_sheet_names(tmp_path: Path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"  # says nothing: left out
+    ws["B1"], ws["E1"] = "Sósa", "Salat"
+    ws["B2"], ws["E2"] = "2 dl rjómi", "1 haus kál"
+    ws["B3"], ws["E3"] = "Hrært saman.", "Skorið fínt."
+    named = wb.create_sheet("Eftirréttir")
+    named.append(["200 g", "smjör", "200 g", "butter"])  # one block: a row stays together
+    wb.save(tmp_path / "w.xlsx")
+    assert office.extract_spreadsheet(tmp_path / "w.xlsx") == (
+        "# w\n\nSósa\n2 dl rjómi\nHrært saman.\nSalat\n1 haus kál\nSkorið fínt.\n\f\n"
+        "## Eftirréttir\n\n200 g | smjör | 200 g | butter\n"
+    )
