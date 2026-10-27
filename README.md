@@ -110,9 +110,10 @@ open demo.html
 
 ### Your own collection
 
+recipify assumes nothing about your files: drop them into a folder, in any structure and with any names, and run it.
+
 ```bash
-uv run recipify --sources path/to/files run   # inventory, extract, structure, catalog (all free)
-uv run recipify build                         # dist/index.html with every ready recipe
+uv run recipify run path/to/your/recipes      # every stage, then dist/index.html with every ready recipe
 uv run recipify show "Desserts/Cheesecake.pdf"  # one recipe: tier, reasons, structured content
 uv run recipify trace "Cakes - recipes.pdf#2"  # the second recipe of a split document, back to its file
 ```
@@ -126,7 +127,7 @@ uv run recipify register "Scans/notebook.pdf" --text notebook.md --engine vision
 
 A registered transcription goes to `review`, because there is no text layer to check it against. It moves to `ready` once a person has checked it and set its tier in `curation.json`.
 
-Corrections that don't belong in code (a better title, a kind, a tier set after review, a document that must not be split) go in `data/curation.json`. Everything under `data/` is git-ignored.
+Corrections that don't belong in code (a better title, a kind, a tier set after review, a document that must not be split) go in `data/curation.json`. So do words that your collection uses and the defaults don't know: the defaults cover English and Icelandic, and `"vocabulary"` adds to them, for example `{"vocabulary": {"collection_names": ["recettes"], "photo_folders": ["fotos"]}}` ([`vocabulary.py`](src/recipify/vocabulary.py)). Everything under `data/` is git-ignored, so keep one data folder per collection (`--data`).
 
 ### Publishing privately
 
@@ -146,6 +147,7 @@ src/recipify/
   pipeline.py           runs the stages: caching, costly-result protection, run log
   classify.py           file categories from content (poppler, zip sniffing, image headers)
   inventory.py          stage 1: hashing, de-duplication, triage
+  vocabulary.py         the words that steer triage and splitting (defaults + your additions)
   split.py              stage 2b: one recipe per unit, clear cases only
   trace.py              follows a recipe back to its source, verifying every hash
   extract/              stage 2: pdf (poppler, page images), docx (XML walker), office (LibreOffice, openpyxl)

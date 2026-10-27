@@ -89,7 +89,7 @@ def test_stages_cache_and_resume(ws: Workspace):
     assert tart.assessment.fidelity == tart.assessment.precision == 1.0
     assert tart.duplicates == ["copy/Tartdeig (1).pdf"]
     assert tart.labels["course"] == ["bread & pastry"]
-    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v1"
+    assert tart.extraction == "poppler@v2" and tart.structure == "rules@v2"
     assert by_source["Eftirréttir/Skyrkaka.docx"].title == "Skyrkaka góða"
     assert by_source["Handbook.pdf"].assessment.reasons == [
         "book (10 pages): not split into recipes yet"
@@ -415,3 +415,33 @@ def test_trace_of_a_document_without_text(ws: Workspace):
     links = trace(ws, inv, photo)
     assert [link.stage for link in links] == ["recipe", "source", "source"]
     assert links[-1].ok is True
+
+
+def test_vocabulary_extends_the_defaults():
+    from recipify.split import plan
+    from recipify.vocabulary import Vocabulary
+
+    words = Vocabulary(
+        reference_names=["fiche"],
+        photo_folders=["fotos"],
+        collection_names=["recettes"],
+        coursework_markers=["eleve"],
+    )
+    curation = Curation(vocabulary=words)
+    assert triage("Fiche cuisine.pdf", Category.READABLE_PDFS, 1, curation) == Kind.REFERENCE
+    assert triage("Fotos/plat.jpg", Category.IMAGE_FILES, None, curation) == Kind.PHOTO
+    assert triage("Fotos/plat.jpg", Category.IMAGE_FILES, None, Curation()) == Kind.RECIPE
+    page = "Gâteau\n200 g farine\n100 g sucre\n2 oeufs\nMéthode:\n" + "Mélanger et cuire. " * 5
+    other = page.replace("Gâteau", "Tarte").replace("200 g", "300 g")
+    text = page + "\n\f\n" + other
+    assert plan(text, "Desserts - recettes", words)[0] == "split"
+    assert plan(text, "Desserts - recettes")[0] == "whole"  # "recettes" is not a default
+    student = Extraction(sha256="x", engine="e", version=1, text="Élève: Marie\n2 oeufs")
+    parsed = Structured(
+        sha256="x", engine="rules", version=2, extraction="e", recipe=Recipe(title="x")
+    )
+    assert assess(_source(), student, parsed, vocabulary=words).reasons == [
+        "course material: a school assignment"
+    ]
+    loaded = Curation.model_validate_json('{"vocabulary": {"collection_names": ["recettes"]}}')
+    assert loaded.vocabulary.collection.search("mes recettes")

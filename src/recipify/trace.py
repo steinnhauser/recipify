@@ -29,11 +29,12 @@ def _parse(label: str) -> tuple[str, int]:
 
 def trace(ws: Workspace, inv: Inventory, entry: Entry) -> list[Link]:
     f = inv.files[entry.source]
+    root = Path(inv.root) if inv.root else ws.sources  # where the files were when scanned
     tier = entry.assessment.tier.value
     links = [Link("recipe", f"{entry.title!r}  id {entry.id}  tier {tier}")]
     if not entry.extraction:
         links.append(Link("source", f"{f.path}  ({'; '.join(entry.assessment.reasons)})"))
-        return links + [_source(ws, f.path, f.sha256)]
+        return links + [_source(root, f.path, f.sha256)]
 
     ex_engine, ex_version = _parse(entry.extraction)
     extraction_path = ws.extraction_path(f.sha256, ex_engine, ex_version)
@@ -78,11 +79,11 @@ def trace(ws: Workspace, inv: Inventory, entry: Entry) -> list[Link]:
     links.append(
         Link("extraction", f"{entry.extraction}", extraction_path, extraction.sha256 == f.sha256)
     )
-    return links + [_source(ws, f.path, f.sha256, entry.duplicates)]
+    return links + [_source(root, f.path, f.sha256, entry.duplicates)]
 
 
-def _source(ws: Workspace, path: str, digest: str, copies: list[str] | None = None) -> Link:
-    file = ws.sources / path
+def _source(root: Path, path: str, digest: str, copies: list[str] | None = None) -> Link:
+    file = root / path
     ok = file.is_file() and sha256(file) == digest
     also = f"  (identical copies: {', '.join(copies)})" if copies else ""
     return Link("source", f"{path}  sha256 {digest[:16]}…{also}", file, ok)

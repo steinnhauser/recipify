@@ -258,3 +258,27 @@ def test_intro_lines_and_two_names_in_a_row():
     text = "Réttur\n# Sósa\n# Grunnur\n2 egg"
     r = structure(text, "x")
     assert [s.name for s in r.sections] == ["Sósa", "Grunnur"]
+
+
+def test_instructions_written_between_ingredients():
+    text = """Eplakaka
+Botn
+150 g hafrar
+300 ml mjólk
+Látið standa í skál
+500 g sykur
+250 g smjör
+Hrærið smjörið og sykurinn saman
+900 g hveiti
+10 g salt
+Bakið við 170°C í 35 mín
+Steikt smælki"""
+    r = structure(text, "x")
+    _check(r, text)
+    groups = [([i.text for i in s.ingredients], s.steps) for s in r.sections]
+    assert groups == [
+        (["150 g hafrar", "300 ml mjólk"], ["Látið standa í skál"]),
+        (["500 g sykur", "250 g smjör"], ["Hrærið smjörið og sykurinn saman"]),
+        (["900 g hveiti", "10 g salt"], ["Bakið við 170°C í 35 mín", "Steikt smælki"]),
+    ]
+    assert r.sections[0].name == "Botn"

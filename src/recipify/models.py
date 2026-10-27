@@ -42,6 +42,7 @@ class SourceFile(BaseModel):
 
 class Inventory(BaseModel):
     created_at: str = Field(default_factory=now_iso)
+    root: str = ""  # absolute path of the sources folder that was scanned
     files: dict[str, SourceFile] = {}
 
     def canonical(self) -> list[SourceFile]:

@@ -195,7 +195,7 @@ def run_split(
             result.skipped += 1
             continue
         decision = split_stage.split(
-            f.sha256, _label(extraction), extraction.text, stem, keep_whole
+            f.sha256, _label(extraction), extraction.text, stem, keep_whole, curation.vocabulary
         )
         path = ws.split_path(f.sha256, _label(extraction), decision.engine, decision.version)
         write_json(path, decision)
@@ -361,7 +361,7 @@ def _entries(ws: Workspace, f: SourceFile, copies: list[str], curation: Curation
                 unit.index,
                 len(decision.units),
             )
-        entry.assessment = assess(f, extraction, structured, unit.text)
+        entry.assessment = assess(f, extraction, structured, unit.text, curation.vocabulary)
         if structured:
             recipe = structured.recipe
             entry.structure = f"{structured.engine}@v{structured.version}"

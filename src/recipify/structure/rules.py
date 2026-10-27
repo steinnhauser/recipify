@@ -19,7 +19,7 @@ from recipify.models import Ingredient, Recipe, Section
 from recipify.structure.quantities import NUMBERED_STEP, parse_ingredient
 from recipify.text import fold
 
-ENGINE, VERSION = "rules", 1
+ENGINE, VERSION = "rules", 2
 
 METHOD_LABEL = re.compile(  # matched on the original text, so the rest keeps its offsets
     r"^(?:a[ðd]fer[ðd]|method|methods|directions|instructions|preparation|framkvæmd"
@@ -30,7 +30,7 @@ INGREDIENTS_LABEL = re.compile(r"^(?:hraefni|innihald|ingredients|uppskrift)\b\s
 NOTE_LABEL = re.compile(
     r"^(?:geymsluthol|shelf ?life|storage|geymsla|yield|magn|skammtar|serves|portions"
     r"|ath\b|athugid|note|notes|tip|allergens?|ofnaemisvald\w*|samsetning|plating"
-    r"|framreidsla|served?\b)",
+    r"|framreidsla|served?\b|thessi uppskrift|uppskriftin gefur|makes\b|dugar)",
 )
 # Single words that are ingredients even without a quantity, never component names.
 BARE_INGREDIENTS = {
@@ -40,6 +40,18 @@ BARE_INGREDIENTS = {
 # "Smá vatn", "a pinch of salt": amounts in words, so ingredients even without a number.
 AMOUNT_WORDS = re.compile(r"^(?:sma|ogn|dash|pinch|klipa|a little|some|handful|hnefi)\b")
 LONG_INGREDIENT = 8  # words; longer lines that start with a number are sentences
+# Cooking verbs (folded), for instruction lines written between ingredients:
+# "Lagt í bleyti", "Þessu er hrært vel saman", "Bake at 180°C", "Weigh 550 g per tin".
+METHOD_VERBS = set(
+    "hraert hrara hraerid blandad blandid bakad bakid vigtad vigtid rullad rullid lagt sett "
+    "settur sodid thett theytt theytid pensla penslad kaelt kaelid steikt latid unnid "
+    "hnodad hnodid baett baetid skorid sigtad smakkad maukad fryst hitad hitid braett saxad "
+    "strad hellt smurt sprautad pakkad eldad grillad ristad mulid hefast dreift kaela "
+    "mix stir bake whisk add combine beat knead roll weigh cool chill fold heat boil simmer "
+    "pour spread cut fry season blend rest preheat sift soak melt".split()
+)
+TEMPERATURE_OR_TIME = re.compile(r"\d\s*°|\bgrad|\b\d+\s*(?:min|klst|hours?|sek)\b")
+WRAP_CHARS = 35  # a step line shorter than this ended there; it was not wrapped
 BULLET = re.compile(r"^[-•*–]\s+")
 HEADING = re.compile(r"^#{1,6}\s+")
 TERMINAL = (".", "!", "?", ":")
@@ -96,6 +108,16 @@ def _lines(text: str) -> list[Line]:
     return out
 
 
+def _instruction(line: Line) -> bool:
+    """A method step written between ingredients ("Lagt í bleyti", "Bakað 180°C í 20 mín")."""
+    if _is_qty(line):
+        return False
+    if TEMPERATURE_OR_TIME.search(line.folded):
+        return True
+    words = re.findall(r"\w+", line.folded)
+    return len(words) >= 3 and any(w in METHOD_VERBS for w in words)
+
+
 def _is_qty(line: Line) -> bool:
     return not line.number and parse_ingredient(line.text.replace(" · ", " ")) is not None
 
@@ -107,6 +129,8 @@ class _Parser:
         self.section = Section()
         self.mode = "start"  # start (after a name) | ingredients | method
         self.note_open = False  # last note ended with ':' and takes the next line
+        self.last_line_len = 0  # of the last physical line added to a step
+        self.inline = False  # the last step was an instruction between ingredients
 
     # -- lookahead ---------------------------------------------------------------------
 
@@ -121,7 +145,7 @@ class _Parser:
         if line.heading:
             return 2
         bare = line.folded in BARE_INGREDIENTS or AMOUNT_WORDS.match(line.folded)
-        if not line.short or line.bullet or line.number or bare:
+        if not line.short or line.bullet or line.number or bare or _instruction(line):
             return 0
         if line.text[:1].islower() or _is_qty(line) or SENTENCE_BREAK.search(line.text):
             return 0
@@ -194,6 +218,8 @@ class _Parser:
             steps[-1] += " " + line.text
         else:
             steps.append(line.text)
+        self.last_line_len = len(line.text)
+        self.inline = False
 
     def _add_note(self, line: Line) -> None:
         notes = self.section.notes
@@ -237,6 +263,10 @@ class _Parser:
                     self.recipe.intro.append(line.text)
                 else:
                     self._add_note(line)
+            elif self.mode == "ingredients" and _instruction(line):
+                self._add_step(Line(line.text, para_start=True))  # closes the group above
+                self.inline = True
+                self.mode = "method"
             elif evidence == 2 or (evidence == 1 and self.mode == "method"):
                 self._name(line)
             elif evidence == 1 and self.mode == "start" and empty and not self.section.name:
@@ -273,8 +303,11 @@ class _Parser:
         steps = self.section.steps
         if not steps:
             return not long
-        if not line.para_start and not steps[-1].endswith(TERMINAL):
+        wrapped = self.last_line_len >= WRAP_CHARS and not steps[-1].endswith(TERMINAL)
+        if not line.para_start and wrapped:
             return False  # a wrapped step line that happens to start with a number
+        if self.inline:
+            return not long  # after "Lagt í bleyti": the next group of ingredients
         nxt = self.lines[i + 1 : i + 2]
         found = parse_ingredient(line.text)
         return not long and (

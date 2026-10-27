@@ -4,6 +4,8 @@ This document explains how recipify decides that a recipe can be trusted, and ho
 
 ## Goals
 
+0. **Plug and play.** Anyone can drop an unorganised folder of recipe files into a directory and run `recipify run <folder>`. Nothing in the code knows about a particular archive. What a collection needs beyond the defaults (words in another language, its own name for photo folders, a decision about one document) goes in `curation.json`.
+
 1. **Faithful.** A published recipe says exactly what its source document says, with nothing lost, corrected or invented, laid out so it is as easy to follow as the original.
 2. **Honest about difficulty.** Some documents are easy wins (a Word file or a PDF exported from one). Others are scans that need a transcription, are whole books, or are not recipes at all. The pipeline sorts them and says why.
 3. **Cheap to re-run.** Every key step is stored. Re-running skips finished work, and transcriptions of scans are never overwritten.
@@ -40,7 +42,9 @@ data/
 [`inventory.py`](../src/recipify/inventory.py) then:
 
 - merges byte-identical copies, keeping the copy without "(2)" or "copy" in its path;
-- triages each document as a **recipe**, a **book** (EPUB, or more than 8 pages) or **reference** material (mise en place lists, menus, staff rules, cleaning plans, by name).
+- triages each document as a **recipe**, a **book** (EPUB, or more than 8 pages), **reference** material (mise en place lists, menus, staff rules, cleaning plans, by name), or a **photo** of a plated dish (an image in a photo folder).
+
+The words behind these decisions are in [`vocabulary.py`](../src/recipify/vocabulary.py): generic English and Icelandic defaults, which a collection extends in `curation.json`.
 
 ## Stage 2: extract
 
@@ -84,6 +88,7 @@ The parser is a small state machine (`start`, `ingredients`, `method`) with a fe
 - **Component names.** A short line directly followed by a quantity is a component name (strong evidence). A short line followed by a list of bare ingredients and then a method label is one too (weak evidence). A short line followed by prose names a component that has only a method ("Beetroot / The beetroots are baked whole…").
 - **Labels and notes.** The source's own labels ("Aðferð:", "Hráefni", "Method") are kept and shown as headings. "Geymsluþol: 3 dagar." (shelf life) becomes a note, even when the PDF wrapped it over two lines.
 - **Wrapped lines.** Lines wrapped in the middle of a sentence are joined back into one step. Step numbers and bullets become list markers.
+- **Instructions between ingredients.** Bakery sheets often interleave short instructions with the ingredients: "Lagt í bleyti" (soak), "Þessu er hrært vel saman" (mix this well), "Bakað við 175°C í 40 mín". A line with a cooking verb and at least three words, or with a temperature or a time, closes the group of ingredients above it as its step. The source's order is kept: the viewer shows each group with its instruction (`rules@v2`).
 - **Dropped lines.** A title repeated at the top or after a page break is dropped, and recorded in `Recipe.dropped`.
 
 The parser never edits text. Each source line ends up in exactly one place, which is what makes the fidelity check below meaningful. It runs once per unit, and its result is stored under the SHA-256 of the unit's text. The same text always gives the same file, and a changed split or extraction gives a new file beside the old one.

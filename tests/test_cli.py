@@ -118,8 +118,12 @@ def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_ambiguous_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
-    shutil.copytree(EXAMPLES / "Bakery", tmp_path / "recipes")
-    invoke("run")
+    shutil.copytree(EXAMPLES / "Bakery", tmp_path / "my files")  # any folder, as dropped
+    out = invoke("run", "my files", "--title", "Bakery")
+    assert "Viewer: dist/index.html (3 recipes)" in out
+    assert "<title>Bakery</title>" in (tmp_path / "dist/index.html").read_text()
+    assert "Viewer" not in invoke("run", "my files", "--no-build")
     out = fails("trace", "Kökur - uppskriftir.pdf")
     assert "holds 2 recipes" in out and "Kökur - uppskriftir.pdf#2" in out
-    assert "✓ unit" in invoke("trace", "Kökur - uppskriftir.pdf#2")
+    out = invoke("trace", "Kökur - uppskriftir.pdf#2")
+    assert "✓ unit" in out and "✓ source" in out  # found where it was scanned

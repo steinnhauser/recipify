@@ -14,14 +14,10 @@ from collections import Counter
 
 from recipify.categories import NO_TEXT_LAYER, Category
 from recipify.models import Assessment, Extraction, Kind, Recipe, SourceFile, Structured, Tier
-from recipify.text import tokens
+from recipify.text import fold, tokens
+from recipify.vocabulary import Vocabulary
 
 MIN_WORDS, MAX_WORDS = 25, 3000
-# School assignments and exams: several dishes per document, with student and teacher names.
-COURSEWORK = re.compile(
-    r"\b(?:nemandi|nemendur|kennari|kennarar|námsta[ðd]ur|sveinspróf|i[ðd]an fræðslusetur)\b",
-    re.I,
-)
 MIN_TEXT_QUALITY = 0.9
 MAX_UNSTRUCTURED = 0.4  # share of words that sit in intro/notes rather than lists and steps
 
@@ -114,6 +110,7 @@ def assess(
     extraction: Extraction | None,
     structured: Structured | None,
     text: str | None = None,
+    vocabulary: Vocabulary | None = None,
 ) -> Assessment:
     """`text` is what was structured: one unit of a split document, or the whole text."""
     if reason := _excluded(file):
@@ -128,7 +125,7 @@ def assess(
     if structured is None:
         return Assessment(tier=Tier.EXCLUDED, reasons=["not structured yet"])
 
-    if COURSEWORK.search(extraction.text):
+    if (vocabulary or Vocabulary()).coursework.search(fold(extraction.text)):
         return Assessment(tier=Tier.EXCLUDED, reasons=["course material: a school assignment"])
 
     recipe = structured.recipe

@@ -18,17 +18,15 @@ breaks in Word) when all of these hold:
 """
 
 import hashlib
-import re
 from collections import Counter
 
 from recipify.models import Recipe, Split, Unit
 from recipify.structure import rules
 from recipify.text import fold, tokens
+from recipify.vocabulary import Vocabulary
 
 ENGINE, VERSION = "pages", 1
 MIN_MEASURED, MIN_WORDS = 2, 25
-# "uppskriftir" = recipes, "kökur"/"tertur" = cakes/tortes (folded: no accents)
-COLLECTION_NAME = re.compile(r"uppskrift|recipes|\bkokur\b|\btertur\b")
 
 
 def pages(text: str) -> list[str]:
@@ -92,12 +90,15 @@ def _whole(text: str, reason: str) -> tuple[str, list[str], list[Unit]]:
     return "whole", [reason], [_unit(1, list(range(1, len(pages(text)) + 1)), [text], [])]
 
 
-def plan(text: str, name: str) -> tuple[str, list[str], list[Unit]]:
+def plan(
+    text: str, name: str, words: Vocabulary | None = None
+) -> tuple[str, list[str], list[Unit]]:
     """(decision, reasons, units) for one document's text; `name` is its file name."""
+    collection = (words or Vocabulary()).collection
     numbered = [(n, p) for n, p in enumerate(pages(text), 1) if p.strip()]
     if len(numbered) < 2:
         return _whole(text, "one page")
-    if not COLLECTION_NAME.search(fold(f"{name} {_first_line(numbered[0][1])}")):
+    if not collection.search(fold(f"{name} {_first_line(numbered[0][1])}")):
         return _whole(text, "not named as a collection of recipes, so pages may be one dish")
 
     firsts = [fold(_first_line(p)) for _, p in numbered]
@@ -128,7 +129,7 @@ def plan(text: str, name: str) -> tuple[str, list[str], list[Unit]]:
     heading = ""
     others = [shapes[g[0]] for g in groups[1:]]
     first_line = _first_line(bodies[0][1])
-    by_name = bool(COLLECTION_NAME.search(fold(first_line)))
+    by_name = bool(collection.search(fold(first_line)))
     by_layout = shapes[0] == "named" and others.count("direct") > len(others) / 2
     if by_name or by_layout:
         heading = first_line
@@ -158,11 +159,18 @@ def plan(text: str, name: str) -> tuple[str, list[str], list[Unit]]:
     return "split", [reason], units
 
 
-def split(sha256: str, extraction: str, text: str, name: str, keep_whole: bool = False) -> Split:
+def split(
+    sha256: str,
+    extraction: str,
+    text: str,
+    name: str,
+    keep_whole: bool = False,
+    words: Vocabulary | None = None,
+) -> Split:
     if keep_whole:
         decision, reasons, units = _whole(text, "kept whole by hand in curation.json")
     else:
-        decision, reasons, units = plan(text, name)
+        decision, reasons, units = plan(text, name, words)
     result = Split(
         sha256=sha256,
         engine=ENGINE,

@@ -182,10 +182,20 @@ def catalog(ctx: typer.Context) -> None:
 @app.command()
 def run(
     ctx: typer.Context,
+    folder: Annotated[
+        Path | None, typer.Argument(help="Folder of recipe files (default: --sources).")
+    ] = None,
     force: Annotated[bool, typer.Option(help="Redo local results that exist.")] = False,
+    build_viewer: Annotated[
+        bool, typer.Option("--build/--no-build", help="Also write the viewer.")
+    ] = True,
+    out: Annotated[Path, typer.Option(help="Where to write the viewer.")] = Path("dist/index.html"),
+    title: Annotated[str, typer.Option(help="Collection name shown in the viewer.")] = "recipify",
 ) -> None:
-    """Run every stage: inventory, extract, split, structure and catalog."""
+    """Process a folder of recipe files end to end: every stage, then the viewer."""
     ws = _ws(ctx)
+    if folder is not None:
+        ws = Workspace(folder, ws.data)
     inv = _inventory(ws)
     curation = _curation(ws)
     with console.status("Extracting text..."):
@@ -201,8 +211,13 @@ def run(
     )
     for path, error in ex.errors + st.errors:
         console.print(f"[red]failed[/red] {path}: {error}", highlight=False)
-    _print_summary(pipeline.build_catalog(ws, inv, curation), inv)
+    result = pipeline.build_catalog(ws, inv, curation)
+    _print_summary(result, inv)
     console.print(f"Report: {ws.report_path}")
+    if build_viewer:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(viewer.render(result, title), encoding="utf-8")
+        console.print(f"Viewer: {out} ({len(result.by_tier(Tier.READY))} recipes)")
 
 
 def _entry(ctx: typer.Context, ref: str) -> Entry:
@@ -299,9 +314,9 @@ def lock(
     ),
     verify: Annotated[bool, typer.Option(help="Only check that OUT opens with the key.")] = False,
     show_link: Annotated[bool, typer.Option(help="Print the share link with the key.")] = False,
-    base_url: Annotated[str, typer.Option(help="Where OUT is published.")] = (
-        "https://steinnhm.com/recipify/"
-    ),
+    base_url: Annotated[
+        str, typer.Option(envvar="RECIPIFY_BASE_URL", help="Where OUT is published.")
+    ] = "",
 ) -> None:
     """Encrypt the viewer with ENCRYPTION_KEY (env or .env) for publishing on GitHub Pages."""
     load_dotenv()
@@ -319,5 +334,6 @@ def lock(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(locking.encrypt_page(source.read_text(encoding="utf-8"), key), encoding="utf-8")
     console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB) from {source}")
-    link = base_url + "#key=" + (quote(key, safe="") if show_link else "<ENCRYPTION_KEY>")
+    link = (base_url or "<where you publish it>") + "#key="
+    link += quote(key, safe="") if show_link else "<ENCRYPTION_KEY>"
     console.print(f"Share link: {link}", highlight=False, soft_wrap=True)

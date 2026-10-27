@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- **Plug and play.** `recipify run <folder>` processes any folder of recipe files and writes the viewer. The words that steer triage and splitting moved out of the code into a `Vocabulary` with English and Icelandic defaults, which a collection extends in `curation.json`. The inventory records where its sources live, so `trace` finds them, and `lock` takes its publish URL from `--base-url` or `RECIPIFY_BASE_URL`.
+- **Instructions between ingredients** (`rules@v2`). Short method lines written between ingredients ("soak", "mix this well", "bake at 175°C") now close their group of ingredients instead of being read as ingredients or component names. On the archive this moves 8 recipes from review to ready. `rules@v1` results stay on disk beside the new ones.
+
 ## 0.4.0
 
 - **Split stage.** Documents that hold several recipes are split into one recipe per unit at their page breaks, in clear cases only. The document must be named as a collection, each recipe must start on a titled page, the parts must be recipes rather than fragments, and no two may be translations of each other. 10 documents become 106 recipes, and 439 recipes are now ready (up from 380). Every decision is stored with its reason, and `keep_whole` in `curation.json` overrides it.

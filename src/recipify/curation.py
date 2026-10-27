@@ -6,7 +6,8 @@ Keys are source file stems (the file name without extension)::
      "labels": {"desserts": {"course": ["dessert"]}},
      "kind": {"Missi": "reference"},
      "tier": {"Pylsubrauð": "review"},
-     "keep_whole": ["Sósur og soð"]}
+     "keep_whole": ["Sósur og soð"],
+     "vocabulary": {"collection_names": ["recettes"]}}
 """
 
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from recipify.models import Kind, Tier
+from recipify.vocabulary import Vocabulary
 
 
 class Curation(BaseModel):
@@ -22,6 +24,7 @@ class Curation(BaseModel):
     kind: dict[str, Kind] = {}
     tier: dict[str, Tier] = {}  # force a tier after review (e.g. keep a recipe out)
     keep_whole: list[str] = []  # documents the split stage must not split
+    vocabulary: Vocabulary = Vocabulary()  # words added to the defaults (see vocabulary.py)
 
     @classmethod
     def load(cls, path: Path) -> "Curation":

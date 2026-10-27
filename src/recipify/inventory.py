@@ -18,13 +18,6 @@ from recipify.text import fold
 
 MAX_RECIPE_PAGES = 8  # longer documents are books, binders or course folders
 
-# Kitchen paperwork that is not a recipe (folded: no accents, þ->th, ð->d).
-REFERENCE_NAME = re.compile(
-    r"\b(?:missi|magnutreikn|simaskra|thrif|hladbord|utreikn|starfsm|verdutreikn|pantanir"
-    r"|\w*sedill|menu|eldunartim|reglur|rules|rutina|vaktstjor|innihaldslys|leidarbok)"
-)
-# Folders of dish photos ("Myndir" is Icelandic for pictures): images there are not recipes.
-PHOTO_FOLDERS = {"myndir", "photos", "pictures", "images", "img"}
 COPY_MARKER = re.compile(r"\(\d+\)|\bcopy\b|afrit", re.I)
 
 
@@ -37,15 +30,15 @@ def sha256(path: Path) -> str:
 
 
 def triage(path: str, category: Category, pages: int | None, curation: Curation) -> Kind:
-    stem = Path(path).stem
+    stem, words = Path(path).stem, curation.vocabulary
     if stem in curation.kind:
         return curation.kind[stem]
-    folders = {fold(part) for part in Path(path).parts[:-1]}
-    if category == Category.IMAGE_FILES and folders & PHOTO_FOLDERS:
+    folders = [fold(part) for part in Path(path).parts[:-1]]
+    if category == Category.IMAGE_FILES and any(words.photo_folder.match(f) for f in folders):
         return Kind.PHOTO
     if category == Category.EPUB_BOOKS or (pages or 0) > MAX_RECIPE_PAGES:
         return Kind.BOOK
-    if REFERENCE_NAME.search(fold(stem)):
+    if words.reference.search(fold(stem)):
         return Kind.REFERENCE
     return Kind.RECIPE
 
@@ -95,4 +88,4 @@ def scan(
         first, *copies = sorted(keys, key=_canonical_order)
         for key in copies:
             files[key].duplicate_of = first
-    return Inventory(files=files)
+    return Inventory(root=str(sources.resolve()), files=files)

@@ -54,7 +54,7 @@ def _label(text: str) -> str:
 
 
 def section_html(s: Section) -> str:
-    out = ['<section class="part">']
+    out = ['<section class="part">' if s.name else '<section class="part cont">']
     if s.name:
         out.append(f"<h3>{esc(s.name)}</h3>")
     out.append('<div class="cols">')
