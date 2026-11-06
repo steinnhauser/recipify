@@ -8,12 +8,13 @@ from docx import Document
 
 from recipify.categories import Category
 from recipify.extract.pdf import page_count, pdf_text
+from recipify.markdown import SUFFIXES as MARKDOWN_SUFFIXES
 
 MIN_PDF_TEXT_CHARS = 100  # below this over the sampled pages, the PDF is a scan
 PDF_SAMPLE_PAGES = 5
 
 IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
-IGNORED_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+IGNORED_NAMES = {".ds_store", "thumbs.db", "desktop.ini", "readme.md"}
 IGNORED_SUFFIXES = {".url", ".zip", ".lnk", ".tmp"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 SPREADSHEET_SUFFIXES = {".xls", ".xlsx", ".csv"}
@@ -81,6 +82,8 @@ def classify(path: Path) -> Classification:
         return Classification(Category.IGNORED, "lock/system/shortcut/archive file")
     if path.stat().st_size == 0:
         return Classification(Category.EMPTY_OR_CORRUPTED, "zero bytes")
+    if suffix in MARKDOWN_SUFFIXES:
+        return Classification(Category.MARKDOWN, "recipe written in markdown")
     if suffix == ".epub":
         return Classification(Category.EPUB_BOOKS, "EPUB container")
     if suffix == ".pdf":

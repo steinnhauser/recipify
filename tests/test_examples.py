@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from recipify import pipeline, viewer
+from recipify.categories import Category
 from recipify.curation import Curation
 from recipify.models import Tier
 from recipify.store import Workspace
@@ -19,8 +20,9 @@ def test_examples_end_to_end(tmp_path: Path):
     catalog = pipeline.build_catalog(ws, inv, Curation())
 
     ready = catalog.by_tier(Tier.READY)
-    assert len(ready) == 15
-    assert all(e.assessment.fidelity == e.assessment.precision == 1.0 for e in ready)
+    assert len(ready) == 16
+    checked = [e for e in ready if e.category != Category.MARKDOWN]
+    assert all(e.assessment.fidelity == e.assessment.precision == 1.0 for e in checked)
     reasons = {
         e.source: e.assessment.reasons[0]
         for e in catalog.entries
@@ -55,6 +57,11 @@ def test_examples_end_to_end(tmp_path: Path):
     ]
     assert [e.id[-2:] for e in cakes] == ["-1", "-2"]
 
+    soup = next(e for e in ready if e.category == Category.MARKDOWN)
+    assert (soup.source, soup.title) == ("Home/Barley and kale soup.md", "Barley and kale soup")
+    assert soup.labels["cuisine"] == ["Nordic"] and soup.recipe is not None
+    assert soup.recipe.sections[0].steps[0].startswith("Melt the butter")
+
     page = viewer.render(catalog, "demo")
-    assert page.split("<script>\ntry")[0].count('<article id="r') == 15
+    assert page.split("<script>\ntry")[0].count('<article id="r') == 16
     assert "page 2; recipe 2 of 2" in page

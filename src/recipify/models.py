@@ -183,6 +183,7 @@ class Entry(BaseModel):
     units: int = 1
     unit_pages: list[int] = []  # the source pages this recipe comes from
     structure: str = ""
+    draft: bool = False  # a recipe written in markdown and marked `status: draft`
     transcribed: bool = False  # read from images (by hand or a vision model), not a text layer
     accuracy: float | None = None  # the transcription's stated accuracy (None: not stated)
     title: str = ""

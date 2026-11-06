@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Recipes written in markdown.** A `.md` file is the recipe: it skips extraction, splitting and the word-for-word check and goes into the catalog as written (`markdown@v1`), with the labels it states in a front matter block winning over detected ones. `status: draft` shows in the footer, and `README.md` files are skipped. The samples gain one (`examples/sources/Home/`).
+- Collections live outside the repository; `--sources`/`--data` (or `RECIPIFY_SOURCES`/`RECIPIFY_DATA`) point at them.
 - **Spin the wheel.** A rainbow wheel in the viewer picks one of the recipes listed (up to 16, drawn at random from a longer list). It winds up, spins for about eight seconds and slows down to land under a pointer on the right, where the winner's label reads level; closing the wheel opens that recipe. Long titles wrap onto two lines, a ticking sound is optional (off by default), and a reduced-motion setting gets a short spin.
 
 ## 0.7.0

@@ -21,7 +21,7 @@ recipify started from a real archive: about 1,900 files collected over many year
 
 ```mermaid
 flowchart LR
-    S[("sources<br/>docx, pdf, xlsx,<br/>scans, photos")] --> I["1 inventory<br/>hash · classify · triage"]
+    S[("sources<br/>docx, pdf, xlsx,<br/>scans, photos, md")] --> I["1 inventory<br/>hash · classify · triage"]
     I --> E["2 extract<br/>poppler · python-docx ·<br/>LibreOffice"]
     S -. "scans: pages → transcribe → register*" .-> E
     E --> D["2b split<br/>one recipe per unit"]
@@ -29,6 +29,7 @@ flowchart LR
     T --> A{"4 assess<br/>word-for-word check"}
     A -- ready --> V["5 viewer<br/>one HTML file"]
     A -- review / excluded --> R["report.md<br/>with reasons"]
+    I -. "markdown: the file is the recipe" .-> C["catalog"] --> V
     V --> L["lock<br/>AES-GCM"] --> P["GitHub Pages"]
 ```
 
@@ -127,11 +128,13 @@ uv run recipify pages "Scans/notebook.pdf" --out pages/       # one JPEG per pag
 uv run recipify register "Scans/notebook.pdf" --text notebook.md --engine vision --accuracy 0.95
 ```
 
+Recipes can also be written straight in markdown (`.md`): the file is the recipe, so it skips extraction, splitting and the word-for-word check and goes into the catalog as written, with any course, dish, diet, cuisine and main-ingredient labels it states in a front matter block (others are detected). The format is described in [`markdown.py`](src/recipify/markdown.py), and `examples/sources/Home/` has one. Mark a recipe still being written `status: draft` and its footer says so. `README.md` files are skipped.
+
 A registered transcription goes to `review`, because there is no text layer to check it against. It moves to `ready` once a person has checked it and set its tier in `curation.json`.
 
 `make metadata-list` (or `recipify transcriptions [--below 0.95] [--out list.md]`) lists every transcription, least certain first, with its recipes, tier, engine version and notes: the list to work through when checking transcriptions by hand. It also writes `data/transcriptions.md`.
 
-Corrections that don't belong in code (a better title, a kind, a tier set after review, a document that must not be split) go in `data/curation.json`. So do words that your collection uses and the defaults don't know: the defaults cover English and Icelandic, and `"vocabulary"` adds to them, for example `{"vocabulary": {"collection_names": ["recettes"], "photo_folders": ["fotos"]}}` ([`vocabulary.py`](src/recipify/vocabulary.py)). Everything under `data/` is git-ignored, so keep one data folder per collection (`--data`).
+Corrections that don't belong in code (a better title, a kind, a tier set after review, a document that must not be split) go in `data/curation.json`. So do words that your collection uses and the defaults don't know: the defaults cover English and Icelandic, and `"vocabulary"` adds to them, for example `{"vocabulary": {"collection_names": ["recettes"], "photo_folders": ["fotos"]}}` ([`vocabulary.py`](src/recipify/vocabulary.py)). Keep each collection, with its own data folder, outside the repository and point `--sources` and `--data` (or `RECIPIFY_SOURCES` and `RECIPIFY_DATA`) at it. `data/` is git-ignored in case a run starts here.
 
 ### Publishing privately
 
@@ -157,6 +160,7 @@ src/recipify/
   extract/              stage 2: pdf (poppler, page images), docx (XML walker), office (LibreOffice, openpyxl)
   structure/            stage 3: rules.py (deterministic parser), quantities.py
   assess.py             stage 4: fidelity check, text quality, language, tiers
+  markdown.py           recipes written in markdown, read straight into the catalog
   labels.py, report.py  titles, labels and report.md
   viewer.py, lock.py    stage 5: the viewer and its encryption (templates/)
 examples/

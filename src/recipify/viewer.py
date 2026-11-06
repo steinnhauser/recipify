@@ -18,6 +18,7 @@ from recipify.structure.quantities import UNITS
 
 TEMPLATE = Path(__file__).parent / "templates" / "viewer.html"
 SOURCE_KIND = {
+    Category.MARKDOWN: "markdown",
     Category.READABLE_PDFS: "PDF",
     Category.DOCX_FILES: "Word document",
     Category.LEGACY_OFFICE: "office document",
@@ -104,6 +105,9 @@ def source_line(e: Entry) -> str:
 
 def certainty(e: Entry) -> str:
     """How sure the text is: proven for a text layer, the stated accuracy of a transcription."""
+    if e.category == Category.MARKDOWN:
+        draft = " Draft: still being written." if e.draft else ""
+        return f"Written in markdown: the file is the recipe.{draft}"
     if not e.transcribed:
         return "Certainty: 100% (every word and number checked against the original)."
     if e.accuracy is None:

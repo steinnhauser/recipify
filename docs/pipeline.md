@@ -46,6 +46,10 @@ data/
 
 The words behind these decisions are in [`vocabulary.py`](../src/recipify/vocabulary.py): generic English and Icelandic defaults, which a collection extends in `curation.json`.
 
+### Recipes written in markdown
+
+A `.md` file is classified as `markdown`, and the file is the recipe. Extraction, splitting, structuring and the word-for-word check exist to prove that a recipe says what another document says; a recipe written in markdown has no other document, so [`markdown.py`](../src/recipify/markdown.py) reads it straight into the catalog (structure `markdown@v1`, tier `ready`). Its headings say what each line is (`## ` a component or `## Ingredients`/`## Method`, `- ` an ingredient, `1. ` a step, `> ` a note), and a front matter block can state labels, which win over the detected ones, and `status: draft`. Nothing is stored besides the catalog entry: reading the file again is cheaper than caching it. `trace` checks the file's hash.
+
 ## Stage 2: extract
 
 | Category | Engine | Notes |

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from recipify import inventory
+from recipify import inventory, markdown
 from recipify import split as split_stage
 from recipify.assess import assess
 from recipify.categories import Category
@@ -19,6 +19,7 @@ from recipify.curation import Curation
 from recipify.extract import LOCAL
 from recipify.labels import detect_labels, refine_title
 from recipify.models import (
+    Assessment,
     Catalog,
     Entry,
     Extraction,
@@ -340,6 +341,8 @@ def _folder_hint(e: Entry) -> str:
 def _entries(ws: Workspace, f: SourceFile, copies: list[str], curation: Curation) -> list[Entry]:
     """One catalog entry per recipe in the document (one, unless it was split)."""
     stem = Path(f.path).stem
+    if f.category == Category.MARKDOWN and f.kind == Kind.RECIPE:
+        return [_written(ws, f, copies, curation)]
     extraction = best_extraction(ws, f) if f.kind == Kind.RECIPE else None
     decision = current_split(ws, f, extraction) if extraction else None
     base = Entry(
@@ -381,6 +384,34 @@ def _entries(ws: Workspace, f: SourceFile, copies: list[str], curation: Curation
             entry.recipe = recipe
         entries.append(_curated(entry, stem, curation))
     return entries
+
+
+def _written(ws: Workspace, f: SourceFile, copies: list[str], curation: Curation) -> Entry:
+    """A recipe written in markdown, read as it is: no extraction, split or word-for-word check,
+    since there is no other text to check it against. Labels it states win over detected ones."""
+    stem = Path(f.path).stem
+    written = markdown.read(ws.sources / f.path)
+    recipe = written.recipe
+    title = curation.titles.get(stem, recipe.title)
+    hints = "\n".join([f.path, *copies])
+    labels = detect_labels(title, hints, recipe) | written.labels | curation.labels.get(stem, {})
+    reasons = ["written in markdown: the file is the recipe"] + ["draft"] * written.draft
+    entry = Entry(
+        id=f.sha256[:12],
+        source=f.path,
+        category=f.category,
+        kind=f.kind,
+        duplicates=copies,
+        structure=f"{markdown.ENGINE}@v{markdown.VERSION}",
+        draft=written.draft,
+        title=title,
+        labels=labels,
+        assessment=Assessment(
+            tier=Tier.READY, reasons=reasons, words=sum(len(x.split()) for x in recipe.lines())
+        ),
+        recipe=recipe,
+    )
+    return _curated(entry, stem, curation)
 
 
 def _curated(entry: Entry, stem: str, curation: Curation) -> Entry:

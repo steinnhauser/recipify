@@ -3,11 +3,13 @@
 These fictional recipes were written for this project. They show the pipeline on documents that look like a real kitchen archive, with no private data.
 
 - `recipes/`: the recipes in a small markdown dialect. `# Title`, then intro lines. `## Name` starts a component, `### Aðferð:` or `### Method` labels its method, `- ` lines are ingredients, `1. ` or plain lines under a method label are steps, and `> ` lines are notes. A single-component recipe uses `## Ingredients` and `## Method`.
-- `make_sources.py`: renders the markdown into the documents in `sources/`. It needs LibreOffice and poppler: `uv run python examples/make_sources.py`.
+- `recipes/written/`: a recipe written straight in markdown, with labels in a front matter block. `make_sources.py` copies it unchanged: the file is the source.
+- `make_sources.py`: renders the other markdown into the documents in `sources/`. It needs LibreOffice and poppler: `uv run python examples/make_sources.py`.
 - `sources/`: the generated documents, committed so CI and the tests can run without LibreOffice.
 
 | Document | What it exercises | Expected tier |
 | --- | --- | --- |
+| `Home/Barley and kale soup.md` | a recipe written in markdown, read as written | ready |
 | Word files with soft line breaks (`Bakery/`, `Drinks/`, `Restaurant/Sauces/`) | the docx XML walker | ready |
 | `Restaurant/Desserts/Skyr cheesecake.docx` | an ingredient table | ready |
 | `Restaurant/Mains/Cod with brown butter.docx` | headed components | ready |

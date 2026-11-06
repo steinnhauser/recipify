@@ -159,7 +159,9 @@ def to_png(pdf: Path, target: Path) -> None:
 
 def main() -> None:
     shutil.rmtree(OUT, ignore_errors=True)
-    md = {p.stem: parse(p) for p in sorted(RECIPES.rglob("*.md"))}
+    md = {p.stem: parse(p) for p in sorted(RECIPES.rglob("*.md")) if p.parent.name != "written"}
+    (OUT / "Home").mkdir(parents=True)  # written in markdown: the file itself is the source
+    shutil.copy(RECIPES / "written/barley-kale-soup.md", OUT / "Home/Barley and kale soup.md")
     write_docx(OUT / "Bakery/Kleinur.docx", [md["kleinur"]])
     pdf_from([md["ponnukokur"]], OUT / "Breakfast/Pönnukökur.pdf")
     cakes = [md["gulrotarkaka"], md["hjonabandssaela"]]  # a collection: one recipe per page

@@ -4,6 +4,7 @@ from enum import StrEnum
 
 
 class Category(StrEnum):
+    MARKDOWN = "markdown"  # recipes written in markdown: the file is the recipe, read as written
     READABLE_PDFS = "readable_pdfs"  # PDFs with a text layer: exact text, local
     DOCX_FILES = "docx_files"  # Word .docx: exact text, local
     LEGACY_OFFICE = "legacy_office"  # .doc/.odt/.rtf/.pptx: exact text via LibreOffice

@@ -116,7 +116,7 @@ def test_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     starter = (tmp_path / "mine.html").read_text()
     assert "<title>Mínar uppskriftir</title>" in starter and 'data-editable="1"' in starter
     report = (tmp_path / "site/report.md").read_text()
-    assert "15 recipes ready" in report and "Split documents: 1 into 2 recipes" in report
+    assert "16 recipes ready" in report and "Split documents: 1 into 2 recipes" in report
 
 
 def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
