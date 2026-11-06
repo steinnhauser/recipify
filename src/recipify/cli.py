@@ -377,23 +377,26 @@ def lock(
     base_url: Annotated[
         str, typer.Option(envvar="RECIPIFY_BASE_URL", help="Where OUT is published.")
     ] = "",
+    key_env: Annotated[
+        str, typer.Option(help="Variable holding the key: one per collection, so keys differ.")
+    ] = "ENCRYPTION_KEY",
 ) -> None:
-    """Encrypt the viewer with ENCRYPTION_KEY (env or .env) for publishing on GitHub Pages."""
+    """Encrypt the viewer with the key in ENCRYPTION_KEY (env or .env), or in --key-env."""
     load_dotenv()
-    key = os.environ.get("ENCRYPTION_KEY", "")
+    key = os.environ.get(key_env, "")
     if not key:
-        raise typer.BadParameter("ENCRYPTION_KEY is not set (environment or .env)")
+        raise typer.BadParameter(f"{key_env} is not set (environment or .env)")
     if verify:
         try:
             locking.decrypt_page(out.read_text(encoding="utf-8"), key)
         except Exception as e:
-            console.print(f"[red]{out} does not open with ENCRYPTION_KEY[/red] ({e!r})")
+            console.print(f"[red]{out} does not open with {key_env}[/red] ({e!r})")
             raise typer.Exit(1) from e
-        console.print(f"{out} opens with ENCRYPTION_KEY")
+        console.print(f"{out} opens with {key_env}")
         return
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(locking.encrypt_page(source.read_text(encoding="utf-8"), key), encoding="utf-8")
     console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB) from {source}")
     link = (base_url or "<where you publish it>") + "#key="
-    link += quote(key, safe="") if show_link else "<ENCRYPTION_KEY>"
+    link += quote(key, safe="") if show_link else f"<{key_env}>"
     console.print(f"Share link: {link}", highlight=False, soft_wrap=True)

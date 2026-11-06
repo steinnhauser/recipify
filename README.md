@@ -143,7 +143,17 @@ echo 'ENCRYPTION_KEY="<a long random string>"' >> .env
 uv run recipify lock dist/index.html --show-link   # writes site/index.html (only ciphertext), prints the link
 ```
 
-On `main`, [CI](.github/workflows/ci.yml) refuses to deploy a root page that isn't encrypted. It also checks that the page opens with the `ENCRYPTION_KEY` secret, runs the pipeline on the sample documents for `/demo/`, and publishes the coverage report.
+A second collection gets its own page and its own key, so a link to one never opens the other:
+
+```bash
+echo 'PERSONAL_ENCRYPTION_KEY="<another long random string>"' >> .env
+uv run recipify --sources ~/collections/personal/sources --data ~/collections/personal/data \
+  build --out ~/collections/personal/dist/index.html --title "Personal recipes"
+uv run recipify lock ~/collections/personal/dist/index.html --key-env PERSONAL_ENCRYPTION_KEY \
+  --out site/personal/index.html --show-link
+```
+
+On `main`, [CI](.github/workflows/ci.yml) refuses to deploy a page in `site/` or `site/personal/` that isn't encrypted. It also checks that each page opens with its own secret (`ENCRYPTION_KEY`, `PERSONAL_ENCRYPTION_KEY`) and that the personal page does not open with the other key, runs the pipeline on the sample documents for `/demo/`, and publishes the coverage report.
 
 ## Project layout
 

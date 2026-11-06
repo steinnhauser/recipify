@@ -138,6 +138,15 @@ def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ENCRYPTION_KEY", "other")
     assert "does not open" in fails("lock", "--verify")
 
+    # a second collection, under its own key: the first collection's key does not open it
+    second = ("--key-env", "SECOND_KEY", "--out", "site/second/index.html")
+    monkeypatch.delenv("SECOND_KEY", raising=False)
+    assert "SECOND_KEY is not set" in fails("lock", "viewer.html", *second)
+    monkeypatch.setenv("SECOND_KEY", "another pass")
+    assert "#key=<SECOND_KEY>" in invoke("lock", "viewer.html", *second)
+    assert "opens with SECOND_KEY" in invoke("lock", "--verify", *second)
+    assert "does not open with ENCRYPTION_KEY" in fails("lock", "--verify", "--out", second[-1])
+
 
 def test_ambiguous_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)

@@ -41,6 +41,7 @@
 *.html
 !/src/recipify/templates/*.html
 !/site/*.html
+!/site/personal/*.html
 # README screenshots and the sample documents (fictional recipes written for this project)
 !/docs/*.png
 !/examples/sources/**

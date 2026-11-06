@@ -1,9 +1,10 @@
 # Lints, type-checks and tests every push and pull request. On main, a passing run then
 # publishes site/ to GitHub Pages:
-#   /           the private collection, encrypted locally with `uv run recipify lock` (committed)
+#   /           the kitchen collection, encrypted locally with `uv run recipify lock` (committed)
+#   /personal/  the personal collection, locked the same way under its own key (committed)
 #   /demo/      the whole pipeline run here on the sample documents in examples/sources
 #   /coverage/  the pytest coverage report, plus badge.json for the README badge
-# Recipes from the private collection never reach the repository in plain text.
+# Recipes from the private collections never reach the repository in plain text.
 name: CI
 
 on:
@@ -91,21 +92,30 @@ jobs:
 
       - name: Refuse to publish an unencrypted page
         run: |
-          for f in site/*.html; do
+          for f in site/*.html site/personal/*.html; do
             grep -q '<script id="payload" type="application/json">' "$f" \
               || { echo "::error file=$f::not an encrypted page (run: uv run recipify lock)"; exit 1; }
           done
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: Check the page opens with ENCRYPTION_KEY
+      - name: Check each page opens with its own key, and only with its own
         env:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          PERSONAL_ENCRYPTION_KEY: ${{ secrets.PERSONAL_ENCRYPTION_KEY }}
         run: |
           if [ -z "$ENCRYPTION_KEY" ]; then
             echo "::warning::ENCRYPTION_KEY secret not set; skipping the key check"
           else
             uv run recipify lock --verify
+          fi
+          if [ -z "$PERSONAL_ENCRYPTION_KEY" ]; then
+            echo "::warning::PERSONAL_ENCRYPTION_KEY secret not set; skipping the /personal/ key check"
+          else
+            uv run recipify lock --verify --key-env PERSONAL_ENCRYPTION_KEY --out site/personal/index.html
+            if [ -n "$ENCRYPTION_KEY" ] && uv run recipify lock --verify --out site/personal/index.html; then
+              echo "::error::site/personal/ opens with ENCRYPTION_KEY: the collections must have different keys"; exit 1
+            fi
           fi
 
       - name: Run the pipeline on the sample documents (public demo)
