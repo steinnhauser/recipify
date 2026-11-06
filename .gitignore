@@ -2,10 +2,10 @@
 # Recipe data: never commit (the repository is public).
 # Only the encrypted page in site/ is published; see README "Publishing".
 # ---------------------------------------------------------------------------
-# Sources, pipeline artifacts (incl. curation.json) and viewer builds
-/recipes/
+# Collections (sources, pipeline artifacts, curation.json) live outside the repository;
+# point --sources/--data (or RECIPIFY_SOURCES/RECIPIFY_DATA) at them. data/ is the default
+# --data folder, so artifacts written by a run started here are never committed.
 /data/
-/dist/
 # Recipe documents, scans, photos and archives, wherever they turn up
 *.pdf
 *.doc
