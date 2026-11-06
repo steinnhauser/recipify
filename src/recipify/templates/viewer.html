@@ -108,6 +108,23 @@ dialog.form{max-width:44rem;width:calc(100% - 2rem)}
 .hint{font-size:.82rem;color:var(--muted);margin:.3rem 0}
 #changelist{list-style:none;padding:0;margin:.4rem 0;font-size:.88rem}#changelist li{display:flex;justify-content:space-between;gap:.5rem;padding:.25rem 0;border-bottom:1px dashed var(--line)}
 @media(max-width:600px){.form .grid{grid-template-columns:1fr}}
+.rainbow{display:inline-block;width:.95em;height:.95em;border-radius:50%;vertical-align:-.12em;margin-right:.3rem;background:conic-gradient(#e8505b,#f39c3d,#f4d13d,#7cc85a,#3fb8c9,#5a7de0,#a35ad6,#e8505b)}
+#spin{white-space:nowrap}#spin:disabled{opacity:.45;cursor:default;color:var(--muted);border-color:var(--line)}
+#spinner{text-align:center;width:calc(100% - 2rem);max-width:30rem}
+#spinner h2{margin-top:.4rem}
+.wheel{position:relative;width:min(78vw,24rem,56vh);aspect-ratio:1;margin:.6rem auto .4rem}
+.wheel canvas{width:100%;height:100%;display:block;will-change:transform}
+.pointer{position:absolute;top:50%;right:-.55rem;width:2.1rem;height:1.7rem;margin-top:-.85rem;z-index:2;transform-origin:70% 50%;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))}
+.pointer::before{content:"";position:absolute;inset:0;background:var(--ink);clip-path:polygon(100% 0,100% 100%,0 50%)}
+#spin-from:empty{display:none}
+.hub{position:absolute;left:50%;top:50%;width:24%;aspect-ratio:1;transform:translate(-50%,-50%);border-radius:50%;border:4px solid var(--panel);background:var(--accent);color:#fff;font-weight:700;font-size:1rem;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);z-index:2}
+.hub:disabled{cursor:default}.hub:not(:disabled):hover{filter:brightness(1.08)}
+#spin-result{min-height:2.6em;margin:.5rem 0 .2rem;font-size:1.35rem;font-weight:650;line-height:1.25;color:var(--accent)}
+#spin-result.won{animation:pop .5s cubic-bezier(.2,1.6,.4,1)}
+#spin-result small{display:block;font-size:.8rem;font-weight:400;color:var(--muted)}
+#spinner .row[hidden]{display:none}#spinner .row{display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap;margin:.4rem 0 .6rem}
+#spinner .primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+@keyframes pop{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
 </style>
 </head>
 <body data-stats="__STATS__" data-editable="__EDITABLE__" data-collection="__COLLECTION__" data-units="__UNITS__" data-next-id="1" data-edited="">
@@ -117,6 +134,7 @@ dialog.form{max-width:44rem;width:calc(100% - 2rem)}
   <input id="q" type="search" placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search">
   <div class="filters"><select id="f-course" aria-label="Course"></select><select id="f-diet" aria-label="Diet"></select><select id="f-cuisine" aria-label="Cuisine"></select><select id="f-ingredients" aria-label="Ingredient"></select>
   <button class="icon" id="favonly" title="Show favourites only">★</button>
+  <button class="icon" id="spin" title="Spin the wheel: let chance pick one of the recipes listed"><span class="rainbow"></span>Spin</button>
   <button class="icon" id="clear" title="Clear search and all filters" hidden>Clear</button>
   <button class="icon edit-only" id="new" title="Add a recipe">+ New</button>
   <button class="icon edit-only" id="export" title="Save this collection, with your changes, as a new file">Export</button>
@@ -132,10 +150,19 @@ dialog.form{max-width:44rem;width:calc(100% - 2rem)}
 <h2>About this page</h2>
 <p><b>Where the recipes come from.</b> Every recipe here was converted from an original document (a PDF, a Word file or a spreadsheet) and then checked word for word: each word and number of the original appears in the recipe, and nothing was added. Scans and photos have no text to check against: they were transcribed by reading the image, and their footer gives the transcription's certainty (⚠ marks one below 95%: check it against the original). Recipes checked word for word say <i>Certainty: 100%</i>. The footer of every recipe names its original file (its path in the collection, the pages, identical copies) and a trace id, so the original can be found. A recipe edited or added by hand says so at the bottom.</p>
 <p><b>Finding recipes.</b> Search works on titles and ingredients, with or without accents. Pick a Course, Diet, Cuisine or Ingredient to narrow the list; greyed-out choices would leave nothing. Click a label on a recipe to filter by it. Press <kbd>/</kbd> to jump to the search box.</p>
+<p><b>Can't decide?</b> Press <b>Spin</b> and a wheel picks one of the recipes listed (up to 16, drawn at random from a longer list). Closing the wheel opens the winner.</p>
 <p><b>Cooking.</b> Use ½× to 4× to scale the measured ingredients (baker's percentages stay as they are). Tap an ingredient or a step to tick it off. ⤢ shows only the recipe; ⎙ prints it.</p>
 <p class="edit-only"><b>Adding and editing.</b> Use <i>+ New</i>, or ✎ on a recipe, to add or change recipes, and 🗑 to remove one. Changes are kept in this browser until you <i>Export</i>: that saves a new copy of this file, with your changes, which you can open, share and edit further.</p>
 <p><b>Favourites and notes</b> are saved in this browser only, on this device. They are never uploaded, and they are lost if you clear the browser's site data or use a private window.</p>
 <p><b>Labels</b> (diet, cuisine, ingredients) are detected automatically, so please check the ingredients for allergies.</p>
+</dialog>
+<dialog id="spinner" aria-labelledby="spin-h"><button class="icon close" id="spin-x" title="Close">✕</button>
+<button class="icon close" id="spin-sound" title="Ticking sound" aria-pressed="false">🔇</button>
+<h2 id="spin-h">Let the wheel decide</h2>
+<p class="hint" id="spin-from"></p>
+<div class="wheel"><div class="pointer" id="pointer"></div><canvas id="wheel" aria-hidden="true"></canvas><button class="hub" id="spin-go">Spin</button></div>
+<p id="spin-result" aria-live="polite"></p>
+<div class="row" id="spin-after" hidden><button class="icon" id="spin-again">Spin again</button><button class="icon primary" id="spin-open">Open recipe</button></div>
 </dialog>
 <dialog id="editor" class="form"><form method="dialog" id="editform">
 <h2 id="edit-h">Edit recipe</h2>
@@ -228,6 +255,7 @@ function renderList() {
   updateFacets();
   const rows = filtered();
   $('count').textContent = rows.length + ' recipe' + (rows.length === 1 ? '' : 's');
+  $('spin').disabled = rows.length < 2;
   $('items').innerHTML = rows.map(r => `<div class="item${r.id === current ? ' sel' : ''}" data-id="${r.id}">
     <b>${store.fav[r.id] ? '★ ' : ''}${esc(r.title)}${r.changed ? ' ✎' : ''}</b><small>${esc([...(r.labels.course || []), ...(r.labels.dish || [])].join(' · '))}</small></div>`).join('');
   if (EDITABLE) { const n = changeCount(); $('export').innerHTML = 'Export' + (n ? `<span id="changes">${n}</span>` : ''); }
@@ -471,6 +499,118 @@ if (EDITABLE) {
   addEventListener('beforeunload', e => { if (changeCount()) { e.preventDefault(); e.returnValue = ''; } });
   window.recipify = {parseIngredient, fileName, exportPage};  // for tests and the curious
 }
+
+/* ---- the wheel: let chance pick one of the recipes listed ------------------------------ */
+// At most WHEEL_MAX slices, drawn at random from the list when it is longer. The winner is
+// chosen first (every slice equally likely) and the spin is aimed at it; closing the dialog
+// after the wheel stops opens that recipe.
+const WHEEL_MAX = 16, SPIN_MS = 8500;
+const wheel = {pool: [], angle: 0, winner: null, raf: 0, spinning: false};
+let audio = null;
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+const segAt = a =>  // the slice under the pointer (on the right, where labels read level)
+  Math.floor((((-a % 360) + 360) % 360) / (360 / wheel.pool.length));
+function fit(ctx, t, w) {
+  if (ctx.measureText(t).width <= w) return t;
+  while (t.length > 1 && ctx.measureText(t + '…').width > w) t = t.slice(0, -1);
+  return t.trimEnd() + '…';
+}
+function wrap(ctx, t, w) {  // the title on two lines (the second cut short if need be)
+  const words = t.split(/\s+/); let first = words[0], k = 1;
+  while (k < words.length && ctx.measureText(first + ' ' + words[k]).width <= w) first += ' ' + words[k++];
+  return k < words.length ? [fit(ctx, first, w), fit(ctx, words.slice(k).join(' '), w)] : [fit(ctx, first, w)];
+}
+function drawWheel(win) {
+  const c = $('wheel'), px = Math.round(c.clientWidth * (window.devicePixelRatio || 1)), n = wheel.pool.length;
+  c.width = c.height = px;
+  const ctx = c.getContext('2d'), r = px / 2, s = 2 * Math.PI / n, css = getComputedStyle(document.body);
+  const panel = css.getPropertyValue('--panel').trim() || '#fff', ink = css.getPropertyValue('--ink').trim() || '#222';
+  const rim = px * .022, fs = px * (n <= 8 ? .039 : n <= 12 ? .033 : .037), small = px * (n <= 8 ? .035 : n <= 12 ? .03 : .029);
+  ctx.translate(r, r);
+  wheel.pool.forEach((rec, i) => {
+    const a = i * s, h = Math.round(i * 360 / n), lit = win === undefined || win === i;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, r - rim, a, a + s); ctx.closePath();
+    ctx.fillStyle = lit ? `hsl(${h} 80% 64%)` : `hsl(${h} 22% 74%)`; ctx.fill();
+    ctx.strokeStyle = panel; ctx.lineWidth = px * .005; ctx.stroke();
+    ctx.save(); ctx.rotate(a + s / 2);
+    const font = size => `${win === i ? 750 : 600} ${size}px system-ui,-apple-system,"Segoe UI",sans-serif`;
+    ctx.font = font(fs);  // a title that fits keeps one line; a longer one gets a smaller font and two
+    ctx.fillStyle = lit ? '#1d1a17' : 'rgba(29,26,23,.55)'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    let ls = [rec.title], lh = fs;
+    if (ctx.measureText(rec.title).width > r * .58) { ctx.font = font(small); ls = wrap(ctx, rec.title, r * .58); lh = small; }
+    ls.forEach((l, j) => ctx.fillText(l, r - rim - px * .045, (j - (ls.length - 1) / 2) * lh * 1.1));
+    ctx.restore();
+  });
+  ctx.beginPath(); ctx.arc(0, 0, r - rim / 2, 0, 2 * Math.PI); ctx.strokeStyle = ink; ctx.lineWidth = rim; ctx.stroke();
+  for (let i = 0; i < n; i++) {  // pegs on the rim: the pointer clicks past each one
+    const a = i * s;
+    ctx.beginPath(); ctx.arc(Math.cos(a) * (r - rim / 2), Math.sin(a) * (r - rim / 2), rim * .32, 0, 2 * Math.PI); ctx.fillStyle = panel; ctx.fill();
+  }
+}
+const turn = () => { $('wheel').style.transform = `rotate(${wheel.angle}deg)`; };
+function sound(freq, len, vol) {
+  if (!store.sound) return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime;
+    o.type = 'triangle'; o.frequency.value = freq; g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    o.connect(g).connect(audio.destination); o.start(t); o.stop(t + len + .02);
+  } catch (e) {}
+}
+function flick() {
+  sound(1500, .03, .06);
+  const p = $('pointer'); if (p.animate) p.animate([{transform: 'rotate(-24deg)'}, {transform: 'rotate(0)'}], {duration: 150, easing: 'ease-out'});
+}
+function spin() {
+  if (wheel.spinning) return;
+  const n = wheel.pool.length, seg = 360 / n, calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const i = Math.floor(Math.random() * n), from = wheel.angle;
+  const target = -(i * seg + (.15 + Math.random() * .7) * seg);  // never right on a peg
+  const end = from + (calm ? 1 : 6 + Math.floor(Math.random() * 3)) * 360 + (((target - from) % 360) + 360) % 360;
+  const back = calm ? 0 : 14, wind = calm ? 0 : 700, dur = calm ? 1500 : SPIN_MS;
+  wheel.spinning = true; wheel.winner = null;
+  $('spin-go').disabled = true; $('spin-after').hidden = true;
+  $('spin-result').className = ''; $('spin-result').innerHTML = '<small>Spinning…</small>';
+  drawWheel();
+  let t0 = null, last = segAt(from);
+  const step = now => {
+    if (t0 === null) t0 = now;
+    const t = now - t0;
+    if (t < wind) wheel.angle = from - back * (1 - Math.cos(Math.PI * t / wind)) / 2;  // wind up, then let go
+    else { const p = Math.min(1, (t - wind) / dur); wheel.angle = from - back + (end - from + back) * (1 - Math.pow(1 - p, 4)); }
+    turn();
+    const k = segAt(wheel.angle); if (k !== last) { last = k; flick(); }
+    if (t < wind + dur) { wheel.raf = requestAnimationFrame(step); return; }
+    wheel.angle = end % 360; turn(); wheel.spinning = false; wheel.winner = wheel.pool[i];
+    drawWheel(i); sound(660, .18, .12); setTimeout(() => sound(990, .3, .12), 140);
+    $('spin-result').innerHTML = `${esc(wheel.winner.title)}<small>Close the wheel to open it</small>`;
+    $('spin-result').className = 'won'; $('spin-go').disabled = false; $('spin-after').hidden = false; $('spin-open').focus();
+  };
+  wheel.raf = requestAnimationFrame(step);
+}
+function openWheel() {
+  const rows = filtered(); if (rows.length < 2) return;
+  wheel.pool = shuffle([...rows]).slice(0, WHEEL_MAX);
+  wheel.angle = Math.random() * 360; wheel.winner = null;
+  $('spin-from').textContent = rows.length > WHEEL_MAX
+    ? `${WHEEL_MAX} of the ${rows.length} recipes listed, picked at random. Narrow the search to choose from all of them.`
+    : '';
+  $('spin-result').className = ''; $('spin-result').innerHTML = '<small>Press Spin and wait for it…</small>';
+  $('spin-after').hidden = true; $('spin-go').disabled = false;
+  $('spinner').showModal(); drawWheel(); turn(); $('spin-go').focus();
+}
+const soundIcon = () => { $('spin-sound').textContent = store.sound ? '🔊' : '🔇'; $('spin-sound').setAttribute('aria-pressed', String(!!store.sound)); };
+$('spin').onclick = openWheel;
+$('spin-go').onclick = $('spin-again').onclick = spin;
+$('spin-open').onclick = $('spin-x').onclick = () => $('spinner').close();
+$('spinner').onclick = e => { if (e.target === $('spinner')) $('spinner').close(); };
+$('spin-sound').onclick = () => { store.sound = !store.sound; save(); soundIcon(); };
+$('spinner').addEventListener('close', () => {  // stopped wheel: open its recipe; mid-spin: just cancel
+  cancelAnimationFrame(wheel.raf); wheel.spinning = false;
+  const w = wheel.winner; wheel.winner = null;
+  if (w) show(w.id);
+});
+soundIcon();
 
 R.forEach(index);
 facetOptions();

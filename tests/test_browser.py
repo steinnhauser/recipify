@@ -126,3 +126,32 @@ def test_the_private_build_cannot_edit(page: Page, tmp_path: Path):
     expect(page.locator("#export")).to_be_hidden()
     assert page.evaluate("typeof window.recipify") == "undefined"
     assert Tier.READY  # the entry fixture is ready
+
+
+def test_wheel_picks_a_listed_recipe_and_opens_it(page: Page, starter: Path):
+    page.emulate_media(reduced_motion="reduce")  # the short spin
+    page.goto(starter.as_uri())
+    page.fill("#q", "Ostakaka")
+    expect(page.locator("#spin")).to_be_disabled()  # a wheel needs at least two recipes
+    page.fill("#q", "")
+    page.click("#spin")
+    expect(page.locator("#spin-from")).to_be_hidden()  # every recipe listed is on the wheel
+    expect(page.locator("#spin-after")).to_be_hidden()
+    page.click("#spin-go")
+    expect(page.locator("#spin-result.won")).to_be_visible(timeout=5000)
+    won = page.locator("#spin-result").inner_text().splitlines()[0]
+    assert won in {"Ostakaka", "Annað"}
+    page.click("#spin-open")
+    expect(page.locator("#spinner")).to_be_hidden()
+    expect(page.locator("h2.title")).to_have_text(won)
+
+
+def test_wheel_takes_at_most_sixteen(page: Page, tmp_path: Path):
+    entries = [_entry(id=f"{i:012x}", title=f"Recipe {i}") for i in range(20)]
+    path = tmp_path / "many.html"
+    path.write_text(viewer.render(Catalog(entries=entries), "Many"), encoding="utf-8")
+    page.goto(path.as_uri())
+    page.click("#spin")
+    expect(page.locator("#spin-from")).to_contain_text("16 of the 20 recipes listed")
+    page.click("#spin-x")  # closing before a spin selects nothing
+    expect(page.locator("#empty")).to_be_visible()

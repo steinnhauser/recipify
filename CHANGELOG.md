@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Spin the wheel.** A rainbow wheel in the viewer picks one of the recipes listed (up to 16, drawn at random from a longer list). It winds up, spins for about eight seconds and slows down to land under a pointer on the right, where the winner's label reads level; closing the wheel opens that recipe. Long titles wrap onto two lines, a ticking sound is optional (off by default), and a reduced-motion setting gets a short spin.
+
 ## 0.7.0
 
 - **Editable recipes and export.** Pages built with `build --editable`, the demo and the new `recipify starter` (an editable file with a couple of sample recipes) let anyone add, edit and remove recipes and export the collection as a new file, named as they like with `.html` always added. Unsaved changes survive a reload; the export dialog lists them with an undo for each. Edited and added recipes say so and no longer claim to be checked against an original; unchanged recipes are exported byte for byte. Private collections are built without editing.
