@@ -6,6 +6,8 @@
 # point --sources/--data (or RECIPIFY_SOURCES/RECIPIFY_DATA) at them. data/ is the default
 # --data folder, so artifacts written by a run started here are never committed.
 /data/
+# This machine's Makefile settings (where the collections are)
+/local.mk
 # Recipe documents, scans, photos and archives, wherever they turn up
 *.pdf
 *.doc

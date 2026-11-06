@@ -91,6 +91,8 @@ def parse(text: str, stem: str) -> Written:
             else:  # a component: a sauce, a crumble, a dough...
                 close()
                 part, in_method = Section(name=name), False
+        elif line in ("-", "*"):  # an empty bullet, waiting to be filled in
+            continue
         elif line.startswith(("- ", "* ")):
             part.ingredients.append(_ingredient(line[2:].strip()))
         elif line.startswith(">"):
@@ -107,6 +109,18 @@ def parse(text: str, stem: str) -> Written:
     labels = {f: [v.strip() for v in meta[f].split(",") if v.strip()] for f in FACETS if f in meta}
     labels = {f: v for f, v in labels.items() if v}
     return Written(recipe, labels, meta.get("status", "").casefold() == "draft")
+
+
+def slug(title: str) -> str:
+    """A file name for a title: lower case, letters (accents kept) and digits joined by "-"."""
+    return re.sub(r"[\W_]+", "-", title.casefold().replace("'", "")).strip("-") or "recipe"
+
+
+def template(title: str) -> str:
+    """A new recipe to fill in: the labels to state, and the headings the reader expects."""
+    labels = "".join(f"{f}:\n" for f in FACETS)
+    body = f"# {title}\n\n## Ingredients\n\n- \n\n## Method\n\n1. \n"
+    return f"---\n{labels}status: draft\n---\n\n{body}"
 
 
 def read(path: Path) -> Written:

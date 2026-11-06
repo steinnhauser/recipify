@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from recipify import lock as locking
-from recipify import pipeline, viewer
+from recipify import markdown, pipeline, viewer
 from recipify import trace as tracing
 from recipify.curation import Curation
 from recipify.extract.pdf import render_pages
@@ -364,6 +364,28 @@ def starter(
     console.print(f"Wrote {out} ({len(ready)} recipes): open it, add recipes, then Export")
 
 
+def _opens_as(locked: Path, key: str, page: str) -> bool:
+    try:
+        return locking.decrypt_page(locked.read_text(encoding="utf-8"), key) == page
+    except Exception:  # missing, not a locked page, or another key
+        return False
+
+
+@app.command()
+def new(
+    ctx: typer.Context,
+    title: Annotated[str, typer.Argument(help="The recipe's title.")],
+    folder: Annotated[str, typer.Option(help="Subfolder of the sources folder.")] = "",
+) -> None:
+    """Start a recipe written in markdown: a template in the sources folder to fill in."""
+    path = _ws(ctx).sources / folder / f"{markdown.slug(title)}.md"
+    if path.exists():
+        raise typer.BadParameter(f"{path} already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown.template(title), encoding="utf-8")
+    console.print(f"Wrote {path}")
+
+
 @app.command()
 def lock(
     source: Annotated[Path, typer.Argument(help="Viewer page to encrypt.")] = Path(
@@ -380,6 +402,9 @@ def lock(
     key_env: Annotated[
         str, typer.Option(help="Variable holding the key: one per collection, so keys differ.")
     ] = "ENCRYPTION_KEY",
+    link_file: Annotated[
+        Path | None, typer.Option(help="Also save the share link, with the key, to this file.")
+    ] = None,
 ) -> None:
     """Encrypt the viewer with the key in ENCRYPTION_KEY (env or .env), or in --key-env."""
     load_dotenv()
@@ -394,9 +419,19 @@ def lock(
             raise typer.Exit(1) from e
         console.print(f"{out} opens with {key_env}")
         return
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(locking.encrypt_page(source.read_text(encoding="utf-8"), key), encoding="utf-8")
-    console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB) from {source}")
+    page = source.read_text(encoding="utf-8")
+    if _opens_as(out, key, page):  # a new salt would change the file for nothing
+        console.print(f"{out} is up to date (the same page under the same key)")
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(locking.encrypt_page(page, key), encoding="utf-8")
+        console.print(f"Wrote {out} ({out.stat().st_size // 1024} KB) from {source}")
     link = (base_url or "<where you publish it>") + "#key="
     link += quote(key, safe="") if show_link else f"<{key_env}>"
+    if link_file:  # readable by the owner only: the link opens the page
+        link_file.parent.mkdir(parents=True, exist_ok=True)
+        link_file.touch(mode=0o600)
+        link_file.chmod(0o600)
+        link_file.write_text(base_url + "#key=" + quote(key, safe="") + "\n", encoding="utf-8")
+        console.print(f"Saved the share link to {link_file}")
     console.print(f"Share link: {link}", highlight=False, soft_wrap=True)

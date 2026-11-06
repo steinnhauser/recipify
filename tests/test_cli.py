@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from recipify import cli
+from recipify import cli, markdown
 from recipify.lock import decrypt_page
 
 runner = CliRunner()
@@ -146,6 +146,33 @@ def test_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert "#key=<SECOND_KEY>" in invoke("lock", "viewer.html", *second)
     assert "opens with SECOND_KEY" in invoke("lock", "--verify", *second)
     assert "does not open with ENCRYPTION_KEY" in fails("lock", "--verify", "--out", second[-1])
+    before = (tmp_path / second[-1]).read_text()
+    assert "is up to date" in invoke("lock", "viewer.html", *second)  # nothing changed: kept
+    assert (tmp_path / second[-1]).read_text() == before
+    out = invoke(
+        "lock", "viewer.html", *second, "--base-url", "https://x.org/2/", "--link-file", "l/2"
+    )
+    assert (
+        "Saved the share link to l/2" in out and "another" not in out
+    )  # the key stays in the file
+    link = tmp_path / "l/2"
+    assert link.read_text() == "https://x.org/2/#key=another%20pass\n"
+    assert link.stat().st_mode & 0o777 == 0o600
+
+
+def test_new_markdown_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    out = invoke("--sources", "mine", "new", "Grandma's Rúgbrauð", "--folder", "baking")
+    assert "Wrote mine/baking/grandmas-rúgbrauð.md" in out.replace("\n", "")
+    text = (tmp_path / "mine/baking/grandmas-rúgbrauð.md").read_text(encoding="utf-8")
+    assert text.startswith("---\ncourse:\n") and "status: draft" in text
+    assert "already exists" in fails(
+        "--sources", "mine", "new", "Grandma's rúgbrauð", "--folder", "baking"
+    )
+    written = markdown.parse(text, "x")
+    assert written.recipe.title == "Grandma's Rúgbrauð" and written.draft and written.labels == {}
+    assert written.recipe.sections == [] and written.recipe.intro == []  # nothing filled in yet
+    assert markdown.slug("!!!") == "recipe"
 
 
 def test_ambiguous_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

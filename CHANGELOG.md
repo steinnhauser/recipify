@@ -4,6 +4,8 @@
 
 - **Recipes written in markdown.** A `.md` file is the recipe: it skips extraction, splitting and the word-for-word check and goes into the catalog as written (`markdown@v1`), with the labels it states in a front matter block winning over detected ones. `status: draft` shows in the footer, and `README.md` files are skipped. The samples gain one (`examples/sources/Home/`).
 - **A second collection, under its own key.** `recipify lock --key-env NAME` locks a page with the key in another variable. The personal collection is published at `/personal/` with `PERSONAL_ENCRYPTION_KEY`; CI refuses an unencrypted page there and checks that each page opens with its own key and the personal page not with the other.
+- **`make` for everyday work:** `new`, `preview`, `personal`/`kitchen`, `publish`, `verify`, `link`, `serve`, and the development checks; `make` lists them. `recipify new` starts a markdown recipe from a template, `lock --link-file` saves the share link (owner-readable only), and `lock` keeps a page unchanged when it already holds the same viewer under the same key.
+- The kitchen page gains the wheel.
 - Collections live outside the repository; `--sources`/`--data` (or `RECIPIFY_SOURCES`/`RECIPIFY_DATA`) point at them.
 - **Spin the wheel.** A rainbow wheel in the viewer picks one of the recipes listed (up to 16, drawn at random from a longer list). It winds up, spins for about eight seconds and slows down to land under a pointer on the right, where the winner's label reads level; closing the wheel opens that recipe. Long titles wrap onto two lines, a ticking sound is optional (off by default), and a reduced-motion setting gets a short spin.
 

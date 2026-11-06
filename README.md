@@ -153,6 +153,20 @@ uv run recipify lock ~/collections/personal/dist/index.html --key-env PERSONAL_E
   --out site/personal/index.html --show-link
 ```
 
+### Everyday commands
+
+`make` lists them. Collections live outside the repository, each in `$(COLLECTIONS)/<name>/` with `sources/`, `data/` and `dist/`; put `COLLECTIONS` and `SITE_URL` for your machine in a git-ignored `local.mk`, and pick a collection with `C=<name>`.
+
+```bash
+make new T="Pad thai"     # a markdown recipe to fill in (status: draft)
+make preview              # build the collection and open its viewer on 127.0.0.1:8765
+make personal             # build and lock site/personal/ (make kitchen: the root page)
+make publish              # update every page, verify the keys, commit the pages that changed
+make link                 # the share link (saved, owner-readable only, in the collection's folder)
+```
+
+`recipify lock` leaves a page alone when it already holds the same viewer under the same key, so rebuilding without changes commits nothing.
+
 On `main`, [CI](.github/workflows/ci.yml) refuses to deploy a page in `site/` or `site/personal/` that isn't encrypted. It also checks that each page opens with its own secret (`ENCRYPTION_KEY`, `PERSONAL_ENCRYPTION_KEY`) and that the personal page does not open with the other key, runs the pipeline on the sample documents for `/demo/`, and publishes the coverage report.
 
 ## Project layout
